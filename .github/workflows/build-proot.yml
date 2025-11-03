@@ -1,114 +1,219 @@
-name: Debug PRoot Build
+name: Build and Release PRoot
 
-on: workflow_dispatch
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
 
 jobs:
-  debug-build:
+  build-proot:
     runs-on: ubuntu-latest
-    
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            ndk_arch: aarch64-linux-android
+            api_level: 21
+            output: proot-arm64
+          - arch: arm
+            ndk_arch: armv7a-linux-androideabi
+            api_level: 21
+            output: proot-arm
+          - arch: i686
+            ndk_arch: i686-linux-android
+            api_level: 21
+            output: proot-x86
+          - arch: x86_64
+            ndk_arch: x86_64-linux-android
+            api_level: 21
+            output: proot-x86-64
+      fail-fast: false
+
     steps:
-    - name: Checkout PRoot
+    - name: Checkout PRoot source
       uses: actions/checkout@v4
       with:
         repository: termux/proot
+        path: proot-src
 
-    - name: Install basic tools
+    - name: Get commit details
+      id: commit-info
+      run: |
+        cd proot-src
+        echo "COMMIT_HASH=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "COMMIT_SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
+        git log -1 --pretty=%B | head -n 10 >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "COMMIT_AUTHOR=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
+        echo "COMMIT_DATE=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
+    - name: Setup Android NDK
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r25b
+        add-to-path: true
+
+    - name: Install basic build tools
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          file \
-          wget
+          file
 
-    - name: Check source structure
+    - name: Set up NDK environment for ${{ matrix.arch }}
       run: |
-        echo "=== Source Structure ==="
-        find . -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "GNUmakefile" | head -20
-        echo ""
-        echo "=== Key Files ==="
-        ls -la src/
-        echo ""
-        echo "=== Makefile content ==="
-        head -50 src/GNUmakefile
-
-    - name: Try native build without cross-compilation
-      run: |
-        cd src
-        echo "=== Attempting native build ==="
-        make -f GNUmakefile V=1 || echo "Build failed, continuing..."
+        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+        echo "NDK_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
         
+        # Set compiler paths
+        echo "CC=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}${{ matrix.api_level }}-clang" >> $GITHUB_ENV
+        echo "CXX=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}${{ matrix.api_level }}-clang++" >> $GITHUB_ENV
+        echo "STRIP=$NDK_TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
+        
+        # Set CROSS_COMPILE for the Makefile
+        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}-" >> $GITHUB_ENV
+
+    - name: Build PRoot with NDK for ${{ matrix.arch }}
+      run: |
+        cd proot-src/src
+        
+        echo "Building for ${{ matrix.arch }}"
+        echo "Using NDK: $ANDROID_NDK_HOME"
+        echo "Using CC: $CC"
+        echo "Using CROSS_COMPILE: $CROSS_COMPILE"
+        
+        # Clean previous builds
+        make -f GNUmakefile clean || true
+        
+        # Build with NDK toolchain - all extensions enabled
+        make -f GNUmakefile \
+          CROSS_COMPILE="$CROSS_COMPILE" \
+          CC="$CC" \
+          STRIP="$STRIP" \
+          V=1
+        
+        # Verify the binary
         if [ -f proot ]; then
-          echo "✅ Native build successful!"
+          echo "✅ Build successful!"
           file proot
-          ./proot --help || echo "Help command failed but binary exists"
+          ls -la proot
+          chmod +x proot
+          
+          # Test if it's a valid binary
+          $STRIP --strip-debug proot || echo "Strip failed but continuing"
         else
-          echo "❌ Native build failed"
+          echo "❌ Binary not created!"
+          exit 1
         fi
 
-    - name: Check what compilers are available
+    - name: Prepare binary for release
       run: |
-        echo "=== Available compilers ==="
-        which gcc || echo "gcc not found"
-        gcc --version | head -1 || true
-        echo ""
-        which clang || echo "clang not found" 
-        clang --version | head -1 || true
+        mkdir -p release-binaries
+        cd proot-src/src
+        cp proot ../../release-binaries/${{ matrix.output }}
+        chmod +x ../../release-binaries/${{ matrix.output }}
 
-    - name: Check dependency requirements
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.output }}
+        path: release-binaries/${{ matrix.output }}
+        retention-days: 1
+
+  create-release:
+    needs: build-proot
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Download successful artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        pattern: proot-*
+        merge-multiple: true
+
+    - name: Check available artifacts
       run: |
-        echo "=== Checking for talloc ==="
-        pkg-config --exists talloc && echo "talloc found" || echo "talloc not found"
-        
-        echo ""
-        echo "=== Checking for required headers ==="
-        for header in linux/ashmem.h sys/syscall.h sys/seccomp.h; do
-          if find /usr/include -name "$(basename $header)" | grep -q .; then
-            echo "✅ $header found"
-          else
-            echo "❌ $header not found"
-          fi
+        echo "Available artifacts:"
+        find artifacts -type f -name "proot-*" | while read file; do
+          echo " - $file"
+          file "$file" || true
         done
+        
+        COUNT=$(find artifacts -type f -name "proot-*" | wc -l)
+        echo "Successful builds: $COUNT"
+        echo "COUNT=$COUNT" >> $GITHUB_ENV
 
-    - name: Try build with verbose output
+    - name: Create checksums
+      id: checksums
       run: |
-        cd src
-        echo "=== Detailed build attempt ==="
-        
-        # Check what the build is actually trying to do
-        make -f GNUmakefile -n | head -20
-        
-        echo ""
-        echo "=== Actual build ==="
-        make -f GNUmakefile CC="gcc" V=1 2>&1 | head -100
+        cd artifacts
+        find . -name "proot-*" -type f -exec sha256sum {} \; > checksums.txt
+        echo "CHECKSUMS_CONTENT<<EOF" >> $GITHUB_OUTPUT
+        cat checksums.txt >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
 
-    - name: Check if ashmem is really required
+    - name: Get commit info
+      id: commit
       run: |
-        cd src
-        echo "=== Checking ashmem usage ==="
-        grep -r "ashmem" . || echo "No ashmem references found"
-        
-        echo ""
-        echo "=== Checking conditional compilation ==="
-        grep -r "ifdef.*ashmem\|ifndef.*ashmem" . || echo "No conditional ashmem found"
+        git clone --depth=1 https://github.com/termux/proot.git proot-temp
+        cd proot-temp
+        echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+        echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+        echo "message<<EOF" >> $GITHUB_OUTPUT
+        git log -1 --pretty=%B | head -n 5 >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
+        echo "date=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
-    - name: Try build without problem extensions
-      run: |
-        cd src
-        echo "=== Trying minimal build ==="
-        
-        # Create a simple test to see if core components build
-        gcc -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I./ \
-          -Wall -Wextra -O2 -c ./cli/cli.c -o cli.o && echo "✅ cli.c compiles" || echo "❌ cli.c fails"
-        
-        gcc -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I./ \
-          -Wall -Wextra -O2 -c ./execve/enter.c -o enter.o && echo "✅ enter.c compiles" || echo "❌ enter.c fails"
+    - name: Create GitHub Release
+      if: env.COUNT > 0
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: build-${{ steps.commit.outputs.hash }}
+        name: "PRoot Build - ${{ steps.commit.outputs.hash }}"
+        body: |
+          # PRoot Binaries Build
+          
+          **Built with Android NDK for full Android compatibility**
+          
+          **Source Repository:** [termux/proot](https://github.com/termux/proot)
+          
+          **Commit Details:**
+          - **Hash:** `${{ steps.commit.outputs.full_hash }}`
+          - **Author:** ${{ steps.commit.outputs.author }}
+          - **Date:** ${{ steps.commit.outputs.date }}
+          - **Message:**
+          ```
+          ${{ steps.commit.outputs.message }}
+          ```
+          
+          **Built with all extensions enabled (ashmem, sysvipc, etc.)**
+          
+          **Target API Level:** 21 (Android 5.0+)
+          
+          **Built Architectures:**
+          ${{ env.COUNT }} out of 4 architectures built successfully
+          
+          **SHA256 Checksums:**
+          ```
+          ${{ steps.checksums.outputs.CHECKSUMS_CONTENT }}
+          ```
+          
+          *Automatically built from latest source commit using Android NDK*
+        files: |
+          artifacts/proot-*
+          artifacts/checksums.txt
 
-    - name: Install talloc and retry
+    - name: Notify if no builds succeeded
+      if: env.COUNT == 0
       run: |
-        echo "=== Installing talloc ==="
-        sudo apt-get install -y libtalloc-dev
-        
-        cd src
-        echo "=== Build with talloc installed ==="
-        make -f GNUmakefile clean
-        make -f GNUmakefile V=1 2>&1 | tail -20
+        echo "❌ No builds succeeded - check build logs for details"
+        exit 1
