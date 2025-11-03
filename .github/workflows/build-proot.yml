@@ -17,19 +17,19 @@ jobs:
       matrix:
         include:
           - arch: aarch64
-            ndk_arch: aarch64-linux-android
+            ndk_triplet: aarch64-linux-android
             api_level: 21
             output: proot-arm64
           - arch: arm
-            ndk_arch: armv7a-linux-androideabi
+            ndk_triplet: armv7a-linux-androideabi
             api_level: 21
             output: proot-arm
           - arch: i686
-            ndk_arch: i686-linux-android
+            ndk_triplet: i686-linux-android
             api_level: 21
             output: proot-x86
           - arch: x86_64
-            ndk_arch: x86_64-linux-android
+            ndk_triplet: x86_64-linux-android
             api_level: 21
             output: proot-x86-64
       fail-fast: false
@@ -66,18 +66,43 @@ jobs:
           build-essential \
           file
 
+    - name: Debug NDK paths
+      run: |
+        echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
+        echo "NDK contents:"
+        ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/ || echo "Cannot list NDK"
+        echo "Toolchain bin contents:"
+        ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/ | head -10 || echo "Cannot list bin"
+
     - name: Set up NDK environment for ${{ matrix.arch }}
       run: |
-        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         
-        # Set compiler paths
-        echo "CC=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}${{ matrix.api_level }}-clang" >> $GITHUB_ENV
-        echo "CXX=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}${{ matrix.api_level }}-clang++" >> $GITHUB_ENV
+        # Verify the toolchain exists
+        if [ ! -d "$NDK_TOOLCHAIN" ]; then
+          echo "❌ NDK toolchain not found at: $NDK_TOOLCHAIN"
+          exit 1
+        fi
+        
+        # Set compiler paths - use the correct format
+        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+        CROSS_PREFIX="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-"
+        
+        echo "CC_PATH: $CC_PATH"
+        echo "CROSS_PREFIX: $CROSS_PREFIX"
+        
+        # Verify compiler exists
+        if [ ! -f "$CC_PATH" ]; then
+          echo "❌ Compiler not found: $CC_PATH"
+          echo "Available compilers:"
+          ls "$NDK_TOOLCHAIN/bin/" | grep clang | head -10 || echo "Cannot list compilers"
+          exit 1
+        fi
+        
+        echo "CC=$CC_PATH" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=$CROSS_PREFIX" >> $GITHUB_ENV
         echo "STRIP=$NDK_TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
-        
-        # Set CROSS_COMPILE for the Makefile
-        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_arch }}-" >> $GITHUB_ENV
+        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
 
     - name: Build PRoot with NDK for ${{ matrix.arch }}
       run: |
@@ -87,11 +112,15 @@ jobs:
         echo "Using NDK: $ANDROID_NDK_HOME"
         echo "Using CC: $CC"
         echo "Using CROSS_COMPILE: $CROSS_COMPILE"
+        echo "Using STRIP: $STRIP"
+        
+        # Test compiler
+        $CC --version || echo "Compiler test failed"
         
         # Clean previous builds
         make -f GNUmakefile clean || true
         
-        # Build with NDK toolchain - all extensions enabled
+        # Build with NDK toolchain
         make -f GNUmakefile \
           CROSS_COMPILE="$CROSS_COMPILE" \
           CC="$CC" \
@@ -104,9 +133,6 @@ jobs:
           file proot
           ls -la proot
           chmod +x proot
-          
-          # Test if it's a valid binary
-          $STRIP --strip-debug proot || echo "Strip failed but continuing"
         else
           echo "❌ Binary not created!"
           exit 1
