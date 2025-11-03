@@ -95,28 +95,37 @@ jobs:
 
     - name: Build PRoot with NDK and host-built talloc
       run: |
-        cd proot-src/src
-        echo "Building for ${{ matrix.arch }}"
-        echo "Using CC: $CC"
-        echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
-        echo "TALLOC_LIB: $TALLOC_LIB"
-        make -f GNUmakefile clean || true
-        make -f GNUmakefile \
-          CROSS_COMPILE="$CROSS_COMPILE" \
-          CC="$CC" \
-          STRIP="$STRIP" \
-          CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include" \
-          LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib -static -ltalloc" \
-          V=1
-        if [ -f proot ]; then
-          echo "✅ Build successful!"
-          file proot
-          ls -la proot
-          chmod +x proot
-        else
-          echo "❌ Binary not created!"
-          exit 1
-        fi
+            cd proot-src/src
+            echo "Building for ${{ matrix.arch }}"
+            echo "Using CC: $CC"
+            echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
+            echo "TALLOC_LIB: $TALLOC_LIB"
+            
+            # Test if talloc files exist
+            echo "=== Testing talloc access ==="
+            ls -la $TALLOC_INCLUDE/ || echo "Talloc include not found"
+            ls -la $TALLOC_LIB/ || echo "Talloc lib not found"
+            
+            make -f GNUmakefile clean || true
+            
+            # Build with explicit paths and debug
+            make -f GNUmakefile \
+                  CROSS_COMPILE="$CROSS_COMPILE" \
+                  CC="$CC" \
+                  STRIP="$STRIP" \
+                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
+                  LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib $TALLOC_LIB/libtalloc.a" \
+                  V=1
+            
+            if [ -f proot ]; then
+                  echo "✅ Build successful!"
+                  file proot
+                  ls -la proot
+                  chmod +x proot
+            else
+                  echo "❌ Binary not created!"
+                  exit 1
+            fi
 
     - name: Prepare binary for release
       run: |
