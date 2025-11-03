@@ -93,7 +93,7 @@ jobs:
           --disable-python
         
         # Create a simple cross-answers file for Android
-        cat > android.txt << EOF
+        cat > android.txt << 'EOF'
         checking for uname sysname type... linux
         checking for uname machine type... ${{ matrix.ndk_triplet }}
         checking for uname release type... android
@@ -117,7 +117,7 @@ jobs:
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         
         # Download talloc source
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.2.tar.gz
         cd talloc-2.4.2
         
