@@ -12,26 +12,103 @@ jobs:
       with:
         repository: termux/proot
 
-    - name: Install tools
+    - name: Install basic tools
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          libtool automake \
-          pkg-config \
-          libtalloc-dev \
-          file
+          file \
+          wget
 
-    - name: Try native build
+    - name: Check source structure
+      run: |
+        echo "=== Source Structure ==="
+        find . -name "*.c" -o -name "*.h" -o -name "Makefile" -o -name "GNUmakefile" | head -20
+        echo ""
+        echo "=== Key Files ==="
+        ls -la src/
+        echo ""
+        echo "=== Makefile content ==="
+        head -50 src/GNUmakefile
+
+    - name: Try native build without cross-compilation
       run: |
         cd src
-        make -f GNUmakefile V=1
-        file proot
-        ./proot --version || echo "Version check failed but binary exists"
+        echo "=== Attempting native build ==="
+        make -f GNUmakefile V=1 || echo "Build failed, continuing..."
+        
+        if [ -f proot ]; then
+          echo "✅ Native build successful!"
+          file proot
+          ./proot --help || echo "Help command failed but binary exists"
+        else
+          echo "❌ Native build failed"
+        fi
 
-    - name: Check build requirements
+    - name: Check what compilers are available
+      run: |
+        echo "=== Available compilers ==="
+        which gcc || echo "gcc not found"
+        gcc --version | head -1 || true
+        echo ""
+        which clang || echo "clang not found" 
+        clang --version | head -1 || true
+
+    - name: Check dependency requirements
+      run: |
+        echo "=== Checking for talloc ==="
+        pkg-config --exists talloc && echo "talloc found" || echo "talloc not found"
+        
+        echo ""
+        echo "=== Checking for required headers ==="
+        for header in linux/ashmem.h sys/syscall.h sys/seccomp.h; do
+          if find /usr/include -name "$(basename $header)" | grep -q .; then
+            echo "✅ $header found"
+          else
+            echo "❌ $header not found"
+          fi
+        done
+
+    - name: Try build with verbose output
       run: |
         cd src
-        cat GNUmakefile | head -20
-        echo "Build files:"
-        ls -la
+        echo "=== Detailed build attempt ==="
+        
+        # Check what the build is actually trying to do
+        make -f GNUmakefile -n | head -20
+        
+        echo ""
+        echo "=== Actual build ==="
+        make -f GNUmakefile CC="gcc" V=1 2>&1 | head -100
+
+    - name: Check if ashmem is really required
+      run: |
+        cd src
+        echo "=== Checking ashmem usage ==="
+        grep -r "ashmem" . || echo "No ashmem references found"
+        
+        echo ""
+        echo "=== Checking conditional compilation ==="
+        grep -r "ifdef.*ashmem\|ifndef.*ashmem" . || echo "No conditional ashmem found"
+
+    - name: Try build without problem extensions
+      run: |
+        cd src
+        echo "=== Trying minimal build ==="
+        
+        # Create a simple test to see if core components build
+        gcc -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I./ \
+          -Wall -Wextra -O2 -c ./cli/cli.c -o cli.o && echo "✅ cli.c compiles" || echo "❌ cli.c fails"
+        
+        gcc -D_FILE_OFFSET_BITS=64 -D_GNU_SOURCE -I. -I./ \
+          -Wall -Wextra -O2 -c ./execve/enter.c -o enter.o && echo "✅ enter.c compiles" || echo "❌ enter.c fails"
+
+    - name: Install talloc and retry
+      run: |
+        echo "=== Installing talloc ==="
+        sudo apt-get install -y libtalloc-dev
+        
+        cd src
+        echo "=== Build with talloc installed ==="
+        make -f GNUmakefile clean
+        make -f GNUmakefile V=1 2>&1 | tail -20
