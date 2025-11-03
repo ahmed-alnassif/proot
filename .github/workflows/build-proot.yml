@@ -116,9 +116,9 @@ jobs:
     NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
     
     # Download talloc source
-    wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-    tar xzf talloc-2.4.3.tar.gz
-    cd talloc-2.4.3
+    wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
+    tar xzf talloc-2.4.2.tar.gz
+    cd talloc-2.4.2
     
     # Simple manual build
     mkdir -p install/include install/lib
