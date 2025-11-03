@@ -72,56 +72,17 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc with waf and debug
+    - name: Build talloc with host GCC
       run: |
-            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-            
-            echo "=== Downloading talloc ==="
-            wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-            tar xzf talloc-2.4.3.tar.gz
-            cd talloc-2.4.3
-            
-            echo "=== Setting up environment ==="
-            export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-            export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
-            export CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -D_FILE_OFFSET_BITS=64 -D_LARGE_FILES"
-            export LDFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
-            
-            echo "=== Creating cross answers file ==="
-            echo "checking for uname sysname... linux" > cross-answers.txt
-            echo "checking for uname machine... ${{ matrix.ndk_triplet }}" >> cross-answers.txt
-            echo "checking for uname release... android" >> cross-answers.txt
-            echo "checking for uname version... android" >> cross-answers.txt
-            echo "checking for C compiler... $CC" >> cross-answers.txt
-            echo "checking for __thread... yes" >> cross-answers.txt
-            echo "checking for large file support... yes" >> cross-answers.txt
-            echo "checking for -D_FILE_OFFSET_BITS=64... yes" >> cross-answers.txt
-            echo "checking for -D_LARGE_FILES... yes" >> cross-answers.txt
-            echo "checking for C99 vsnprintf... yes" >> cross-answers.txt
-            echo "checking for HAVE_ACL_TYPE_EXTENDED... no" >> cross-answers.txt
-            echo "checking for HAVE_AIO_H... no" >> cross-answers.txt
-            echo "checking for HAVE_ATTRIBUTE_DESTRUCTOR... no" >> cross-answers.txt
-            echo "checking for HAVE_ATTRIBUTE_SENTINEL... yes" >> cross-answers.txt
-            echo "checking sizeof(off_t)... 8" >> cross-answers.txt
-            echo "checking for getconf LFS_CFLAGS... -D_FILE_OFFSET_BITS=64" >> cross-answers.txt
-            
-            echo "=== Running configure ==="
-            ./configure --prefix=$PWD/install --cross-compile --cross-answers=cross-answers.txt --host=${{ matrix.ndk_triplet }} --disable-python
-            
-            echo "=== Building talloc ==="
-            ./buildtools/bin/waf build -v
-            
-            echo "=== Installing talloc ==="
-            ./buildtools/bin/waf install
-            
-            echo "=== Installation result ==="
-            ls -la install/
-            find install/ -type f
-            
-            echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-            echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
-    
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+        tar xzf talloc-2.4.3.tar.gz
+        cd talloc-2.4.3
+        ./configure --prefix=$PWD/install --disable-python
+        make
+        make install
+        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
+        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
+
     - name: Set up NDK environment
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -132,20 +93,13 @@ jobs:
         echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
 
-    - name: Build PRoot with NDK and custom talloc
+    - name: Build PRoot with NDK and host-built talloc
       run: |
         cd proot-src/src
         echo "Building for ${{ matrix.arch }}"
         echo "Using CC: $CC"
         echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
         echo "TALLOC_LIB: $TALLOC_LIB"
-        echo "SYSROOT: $SYSROOT"
-        
-        # Test talloc access
-        echo "=== Testing talloc files ==="
-        ls -la $TALLOC_INCLUDE/ || echo "No include dir"
-        ls -la $TALLOC_LIB/ || echo "No lib dir"
-        
         make -f GNUmakefile clean || true
         make -f GNUmakefile \
           CROSS_COMPILE="$CROSS_COMPILE" \
@@ -154,7 +108,6 @@ jobs:
           CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include" \
           LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib -static -ltalloc" \
           V=1
-        
         if [ -f proot ]; then
           echo "✅ Build successful!"
           file proot
@@ -162,8 +115,6 @@ jobs:
           chmod +x proot
         else
           echo "❌ Binary not created!"
-          echo "=== Build artifacts ==="
-          find . -name "*.o" | head -10
           exit 1
         fi
 
