@@ -79,7 +79,7 @@ jobs:
         cd talloc-minimal
         
         # Create a minimal talloc.h
-        cat > install/include/talloc.h << 'EOF'
+        cat > install/include/talloc.h << 'TALLOC_HEADER_EOF'
 #ifndef _TALLOC_H_
 #define _TALLOC_H_
 #include <stddef.h>
@@ -94,10 +94,10 @@ void *talloc_new(const void *ctx);
 void *talloc_named(const void *ctx, size_t size, const char *fmt, ...);
 void *talloc_set_destructor(const void *ptr, int (*destructor)(void *));
 #endif
-EOF
+TALLOC_HEADER_EOF
         
         # Create a minimal talloc.c that uses malloc/free
-        cat > talloc.c << 'EOF'
+        cat > talloc.c << 'TALLOC_SOURCE_EOF'
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -118,7 +118,7 @@ char *talloc_strndup(const void *ctx, const char *p, size_t n) {
 void *talloc_new(const void *ctx) { (void)ctx; return malloc(1); }
 void *talloc_named(const void *ctx, size_t size, const char *fmt, ...) { (void)ctx; (void)fmt; return malloc(size); }
 void *talloc_set_destructor(const void *ptr, int (*destructor)(void *)) { (void)ptr; (void)destructor; return NULL; }
-EOF
+TALLOC_SOURCE_EOF
         
         # Compile it
         CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
