@@ -1,149 +1,37 @@
-name: Build and Release PRoot
+name: Debug PRoot Build
 
-on:
-  schedule:
-    # Run daily at 00:00 UTC
-    - cron: '0 0 * * *'
-  workflow_dispatch:
-    # Allow manual triggering
-  push:
-    branches: [ main ]
-
-permissions:
-  contents: write
+on: workflow_dispatch
 
 jobs:
-  build-proot:
+  debug-build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            cc: aarch64-linux-gnu-gcc
-            output: proot-arm64
-          - arch: arm  
-            cc: arm-linux-gnueabihf-gcc
-            output: proot-arm
-          - arch: x86
-            cc: i686-linux-gnu-gcc
-            output: proot-x86
-          - arch: x86_64
-            cc: x86_64-linux-gnu-gcc
-            output: proot-x86-64
-
+    
     steps:
-    - name: Checkout PRoot source
+    - name: Checkout PRoot
       uses: actions/checkout@v4
       with:
         repository: termux/proot
-        path: proot-src
 
-    - name: Get commit details
-      id: commit-info
-      run: |
-        cd proot-src
-        echo "COMMIT_HASH=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "COMMIT_AUTHOR=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "COMMIT_DATE=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
-    - name: Setup build environment
+    - name: Install tools
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          libtool \
-          automake \
+          libtool automake \
           pkg-config \
           libtalloc-dev \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabihf \
-          gcc-i686-linux-gnu \
-          gcc-x86-64-linux-gnu
+          file
 
-    - name: Build PRoot for ${{ matrix.arch }}
+    - name: Try native build
       run: |
-        cd proot-src/src
-        
-        # Set compiler and build
-        export CC=${{ matrix.cc }}
-        make -f GNUmakefile
-        
-        # Create output directory and copy binary
-        mkdir -p ../../dist
-        cp proot ../../dist/${{ matrix.output }}
-        
-        # Make binary executable
-        chmod +x ../../dist/${{ matrix.output }}
+        cd src
+        make -f GNUmakefile V=1
+        file proot
+        ./proot --version || echo "Version check failed but binary exists"
 
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.output }}
-        path: dist/${{ matrix.output }}
-        retention-days: 1
-
-  create-release:
-    needs: build-proot
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: dist
-
-    - name: List downloaded files
+    - name: Check build requirements
       run: |
-        find dist -type f -exec ls -la {} \;
-        echo "Files in dist:"
-        find dist -name "proot-*"
-
-    - name: Create checksums
-      id: checksums
-      run: |
-        cd dist
-        find . -name "proot-*" -type f -exec sha256sum {} \; > checksums.txt
-        echo "CHECKSUMS_CONTENT<<EOF" >> $GITHUB_OUTPUT
-        cat checksums.txt >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: build-$(date +%s)
-        name: "PRoot Build - ${{ needs.build-proot.outputs.commit-info.COMMIT_HASH }}"
-        body: |
-          # PRoot Binaries Build
-          
-          **Source Repository:** [termux/proot](https://github.com/termux/proot)
-          
-          **Commit Details:**
-          - **Hash:** `${{ needs.build-proot.outputs.commit-info.COMMIT_HASH }}`
-          - **Author:** ${{ needs.build-proot.outputs.commit-info.COMMIT_AUTHOR }}
-          - **Date:** ${{ needs.build-proot.outputs.commit-info.COMMIT_DATE }}
-          - **Message:**
-          ```
-          ${{ needs.build-proot.outputs.commit-info.COMMIT_MESSAGE }}
-          ```
-          
-          **Available Binaries:**
-          - `proot-arm64` - ARM64 architecture
-          - `proot-arm` - ARM architecture  
-          - `proot-x86` - x86 architecture
-          - `proot-x86-64` - x86-64 architecture
-          
-          **SHA256 Checksums:**
-          ```
-          ${{ steps.checksums.outputs.CHECKSUMS_CONTENT }}
-          ```
-          
-          *Automatically built from latest source commit*
-        files: |
-          dist/proot-arm64/proot-arm64
-          dist/proot-arm/proot-arm
-          dist/proot-x86/proot-x86
-          dist/proot-x86-64/proot-x86-64
-          dist/checksums.txt
+        cd src
+        cat GNUmakefile | head -20
+        echo "Build files:"
+        ls -la
