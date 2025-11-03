@@ -93,6 +93,28 @@ jobs:
         echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
 
+    - name: Add bzero compatibility library
+      run: |
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+        mkdir -p bzero-compat
+        cd bzero-compat
+        
+        # Create bzero.c that implements bzero using memset
+        cat > bzero.c << 'EOF'
+        #include <string.h>
+        void bzero(void *s, size_t n) {
+        memset(s, 0, n);
+        }
+        EOF
+        
+        # Compile it with NDK
+        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
+        $CC $CFLAGS -c bzero.c -o bzero.o
+        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        
+        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
+
     - name: Patch all bzero usage in PRoot
       run: |
             cd proot-src/src
