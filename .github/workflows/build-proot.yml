@@ -72,53 +72,48 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc for Android using waf
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        
-        # Download and build talloc
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
-        tar xzf talloc-2.4.2.tar.gz
-        cd talloc-2.4.2
-        
-        # Build talloc using waf for Android
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang" \
-        AR="$NDK_TOOLCHAIN/bin/llvm-ar" \
-        RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib" \
-        ./configure \
-          --prefix="$PWD/install" \
-          --cross-compile \
-          --cross-answers=android.txt \
-          --hostcc=gcc \
-          --disable-python
-        
-        # Create a simple cross-answers file for Android
-        cat > android.txt << 'EOF'
-        checking for uname sysname type... linux
-        checking for uname machine type... ${{ matrix.ndk_triplet }}
-        checking for uname release type... android
-        checking for uname version type... android
-        checking for uname processor type... ${{ matrix.ndk_triplet }}
-        checking for uname hardware platform type... unknown
-        checking for uname operating system type... Android
-        checking for C compiler... $NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang
-        EOF
-        
-        # Build with waf
-        python3 ./buildtools/bin/waf build install
-        
-        # Set environment variables for PRoot build
-        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
+- name: Build talloc for Android using waf
+  run: |
+    NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+    
+    # Download and build talloc
+    wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
+    tar xzf talloc-2.4.2.tar.gz
+    cd talloc-2.4.2
+    
+    # Create cross-answers file
+    cat > android.txt << 'EOF'
+    checking for uname sysname type... linux
+    checking for uname machine type... ${{ matrix.ndk_triplet }}
+    checking for uname release type... android
+    checking for uname version type... android
+    checking for uname processor type... ${{ matrix.ndk_triplet }}
+    checking for uname hardware platform type... unknown
+    checking for uname operating system type... Android
+    checking for C compiler... $NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang
+    EOF
+    
+    # Set environment variables
+    export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+    export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
+    export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
+    
+    # Configure and build
+    ./configure --prefix="$PWD/install" --cross-compile --cross-answers=android.txt --hostcc=gcc --disable-python
+    python3 ./buildtools/bin/waf build install
+    
+    # Set environment variables for PRoot build
+    echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
+    echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
 - name: Build talloc for Android
   run: |
     NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
     
     # Download talloc source
-    wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
-    tar xzf talloc-2.4.2.tar.gz
-    cd talloc-2.4.2
+    wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+    tar xzf talloc-2.4.3.tar.gz
+    cd talloc-2.4.3
     
     # Simple manual build
     mkdir -p install/include install/lib
