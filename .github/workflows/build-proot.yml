@@ -101,11 +101,11 @@ jobs:
         
         # Create bzero.c that implements bzero using memset
         cat > bzero.c << 'EOF'
-#include <string.h>
-void bzero(void *s, size_t n) {
-    memset(s, 0, n);
-}
-EOF
+        #include <string.h>
+        void bzero(void *s, size_t n) {
+        memset(s, 0, n);
+        }
+        EOF
         
         # Compile it with NDK
         CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
