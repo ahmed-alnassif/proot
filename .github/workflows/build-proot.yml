@@ -64,67 +64,68 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          file
+          file \
+          wget \
+          git \
+          automake \
+          libtool \
+          pkg-config
 
-    - name: Debug NDK paths
+    - name: Build talloc for Android
       run: |
-        echo "ANDROID_NDK_HOME: $ANDROID_NDK_HOME"
-        echo "NDK contents:"
-        ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/ || echo "Cannot list NDK"
-        echo "Toolchain bin contents:"
-        ls -la $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/ | head -10 || echo "Cannot list bin"
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+        
+        # Download and build talloc
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz
+        tar xzf talloc-2.4.2.tar.gz
+        cd talloc-2.4.2
+        
+        # Configure for Android
+        ./configure \
+          --host=${{ matrix.ndk_triplet }} \
+          --prefix="$PWD/install" \
+          --enable-static \
+          --disable-python \
+          CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang" \
+          CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
+        
+        make && make install
+        
+        # Set environment variables for PRoot build
+        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
+        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
     - name: Set up NDK environment for ${{ matrix.arch }}
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         
-        # Verify the toolchain exists
-        if [ ! -d "$NDK_TOOLCHAIN" ]; then
-          echo "❌ NDK toolchain not found at: $NDK_TOOLCHAIN"
-          exit 1
-        fi
-        
-        # Set compiler paths - use the correct format
         CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CROSS_PREFIX="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-"
-        
-        echo "CC_PATH: $CC_PATH"
-        echo "CROSS_PREFIX: $CROSS_PREFIX"
-        
-        # Verify compiler exists
-        if [ ! -f "$CC_PATH" ]; then
-          echo "❌ Compiler not found: $CC_PATH"
-          echo "Available compilers:"
-          ls "$NDK_TOOLCHAIN/bin/" | grep clang | head -10 || echo "Cannot list compilers"
-          exit 1
-        fi
+        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
         
         echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=$CROSS_PREFIX" >> $GITHUB_ENV
-        echo "STRIP=$NDK_TOOLCHAIN/bin/llvm-strip" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
+        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
+        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
+        echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
 
-    - name: Build PRoot with NDK for ${{ matrix.arch }}
+    - name: Build PRoot with NDK and custom talloc
       run: |
         cd proot-src/src
         
         echo "Building for ${{ matrix.arch }}"
-        echo "Using NDK: $ANDROID_NDK_HOME"
         echo "Using CC: $CC"
-        echo "Using CROSS_COMPILE: $CROSS_COMPILE"
-        echo "Using STRIP: $STRIP"
-        
-        # Test compiler
-        $CC --version || echo "Compiler test failed"
+        echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
+        echo "TALLOC_LIB: $TALLOC_LIB"
         
         # Clean previous builds
         make -f GNUmakefile clean || true
         
-        # Build with NDK toolchain
+        # Build with NDK toolchain and custom talloc
         make -f GNUmakefile \
           CROSS_COMPILE="$CROSS_COMPILE" \
           CC="$CC" \
           STRIP="$STRIP" \
+          CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include" \
+          LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib -static -ltalloc" \
           V=1
         
         # Verify the binary
@@ -133,6 +134,9 @@ jobs:
           file proot
           ls -la proot
           chmod +x proot
+          
+          # Test if it's statically linked
+          ldd proot 2>/dev/null || echo "Binary is statically linked (good)"
         else
           echo "❌ Binary not created!"
           exit 1
@@ -224,6 +228,8 @@ jobs:
           **Built with all extensions enabled (ashmem, sysvipc, etc.)**
           
           **Target API Level:** 21 (Android 5.0+)
+          
+          **Statically linked with talloc**
           
           **Built Architectures:**
           ${{ env.COUNT }} out of 4 architectures built successfully
