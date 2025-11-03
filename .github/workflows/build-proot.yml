@@ -111,46 +111,33 @@ jobs:
         echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
         echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
-    - name: Alternative: Use simple talloc build
-      if: failure()
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        
-        # Download talloc source
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-        tar xzf talloc-2.4.2.tar.gz
-        cd talloc-2.4.2
-        
-        # Simple manual build
-        mkdir -p install/include install/lib
-        
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="-fPIC -I$NDK_TOOLCHAIN/sysroot/usr/include --sysroot=$NDK_TOOLCHAIN/sysroot"
-        
-        # Compile talloc directly
-        $CC $CFLAGS -c lib/talloc/talloc.c -o talloc.o
-        $CC $CFLAGS -c lib/replace/replace.c -o replace.o 2>/dev/null || true
-        
-        # Create static library
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o replace.o 2>/dev/null || $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o
-        
-        # Copy headers
-        cp lib/talloc/talloc.h install/include/
-        
-        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
-
-    - name: Set up NDK environment for ${{ matrix.arch }}
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        
-        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
-        
-        echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
-        echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
+- name: Build talloc for Android
+  run: |
+    NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+    
+    # Download talloc source
+    wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+    tar xzf talloc-2.4.3.tar.gz
+    cd talloc-2.4.3
+    
+    # Simple manual build
+    mkdir -p install/include install/lib
+    
+    CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+    CFLAGS="-fPIC -I$NDK_TOOLCHAIN/sysroot/usr/include --sysroot=$NDK_TOOLCHAIN/sysroot"
+    
+    # Compile talloc directly
+    $CC $CFLAGS -c lib/talloc/talloc.c -o talloc.o
+    $CC $CFLAGS -c lib/replace/replace.c -o replace.o 2>/dev/null || true
+    
+    # Create static library
+    $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o replace.o 2>/dev/null || $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o
+    
+    # Copy headers
+    cp lib/talloc/talloc.h install/include/
+    
+    echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
+    echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
     - name: Build PRoot with NDK and custom talloc
       run: |
