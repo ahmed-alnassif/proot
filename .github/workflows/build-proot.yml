@@ -118,8 +118,13 @@ jobs:
     - name: Build PRoot with NDK and compatibility libs
       run: |
             cd proot-src/src
+            
+            # Simple bzero fix - add strings.h include
+            sed -i '1i #include <strings.h>' tracee/tracee.c
+            
             cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
             cp $BZERO_COMPAT/libbzero.a ./
+            
             make -f GNUmakefile clean || true
             make -f GNUmakefile \
                   CROSS_COMPILE="$CROSS_COMPILE" \
@@ -128,6 +133,7 @@ jobs:
                   CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
                   LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
                   V=1
+            
             if [ -f proot ]; then
                   echo "✅ Build successful!"
                   file proot
