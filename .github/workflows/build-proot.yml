@@ -72,59 +72,73 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build minimal talloc for Android
+    - name: Build talloc with waf and debug
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        mkdir -p talloc-minimal/install/include talloc-minimal/install/lib
-        cd talloc-minimal
         
-        # Create a minimal talloc.h
-        cat > install/include/talloc.h << 'TALLOC_HEADER_EOF'
-#ifndef _TALLOC_H_
-#define _TALLOC_H_
-#include <stddef.h>
-void *talloc_size(const void *ctx, size_t size);
-void *talloc_zero_size(const void *ctx, size_t size);
-void *talloc_memdup(const void *ctx, const void *p, size_t size);
-int talloc_free(void *ptr);
-void *talloc_realloc_size(const void *ctx, void *ptr, size_t size);
-char *talloc_strdup(const void *ctx, const char *p);
-char *talloc_strndup(const void *ctx, const char *p, size_t n);
-void *talloc_new(const void *ctx);
-void *talloc_named(const void *ctx, size_t size, const char *fmt, ...);
-void *talloc_set_destructor(const void *ptr, int (*destructor)(void *));
-#endif
-TALLOC_HEADER_EOF
+        echo "=== Downloading talloc ==="
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+        tar xzf talloc-2.4.3.tar.gz
+        cd talloc-2.4.3
         
-        # Create a minimal talloc.c that uses malloc/free
-        cat > talloc.c << 'TALLOC_SOURCE_EOF'
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-#include "talloc.h"
-
-void *talloc_size(const void *ctx, size_t size) { (void)ctx; return malloc(size); }
-void *talloc_zero_size(const void *ctx, size_t size) { (void)ctx; return calloc(1, size); }
-void *talloc_memdup(const void *ctx, const void *p, size_t size) {
-    (void)ctx; void *result = malloc(size); if (result) memcpy(result, p, size); return result;
-}
-int talloc_free(void *ptr) { free(ptr); return 0; }
-void *talloc_realloc_size(const void *ctx, void *ptr, size_t size) { (void)ctx; return realloc(ptr, size); }
-char *talloc_strdup(const void *ctx, const char *p) { (void)ctx; return p ? strdup(p) : NULL; }
-char *talloc_strndup(const void *ctx, const char *p, size_t n) {
-    (void)ctx; if (!p) return NULL;
-    char *result = malloc(n + 1); if (result) { memcpy(result, p, n); result[n] = '\0'; } return result;
-}
-void *talloc_new(const void *ctx) { (void)ctx; return malloc(1); }
-void *talloc_named(const void *ctx, size_t size, const char *fmt, ...) { (void)ctx; (void)fmt; return malloc(size); }
-void *talloc_set_destructor(const void *ptr, int (*destructor)(void *)) { (void)ptr; (void)destructor; return NULL; }
-TALLOC_SOURCE_EOF
+        echo "=== Directory structure ==="
+        ls -la
+        echo "=== Waf files ==="
+        find . -name "waf*" -o -name "*.py" | head -10
         
-        # Compile it
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="-fPIC --sysroot=$NDK_TOOLCHAIN/sysroot"
-        $CC $CFLAGS -c talloc.c -o talloc.o
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o
+        echo "=== Setting up environment ==="
+        export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+        export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
+        export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
+        export CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
+        export LDFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
+        
+        echo "CC: $CC"
+        echo "AR: $AR"
+        echo "CFLAGS: $CFLAGS"
+        
+        echo "=== Testing compiler ==="
+        $CC --version || echo "Compiler test failed"
+        
+        echo "=== Creating cross answers file ==="
+        cat > cross-answers.txt << 'CROSS_ANSWERS_EOF'
+        checking for uname sysname... linux
+        checking for uname machine... ${{ matrix.ndk_triplet }}
+        checking for uname release... android
+        checking for uname version... android
+        checking for C compiler... $CC
+        checking for __thread... yes
+        checking for large file support... yes
+        checking for -D_FILE_OFFSET_BITS=64... yes
+        checking for -D_LARGE_FILES... yes
+        checking for C99 vsnprintf... yes
+        checking for HAVE_ACL_TYPE_EXTENDED... no
+        checking for HAVE_AIO_H... no
+        checking for HAVE_ATTRIBUTE_DESTRUCTOR... no
+        checking for HAVE_ATTRIBUTE_SENTINEL... yes
+        CROSS_ANSWERS_EOF
+        
+        echo "=== Running configure ==="
+        python3 ./configure --prefix=$PWD/install --cross-compile --cross-answers=cross-answers.txt --host=${{ matrix.ndk_triplet }} --disable-python
+        
+        echo "=== Configure output ==="
+        cat config.log || echo "No config.log found"
+        
+        echo "=== Building with waf ==="
+        python3 ./buildtools/bin/waf --help || echo "Waf help failed"
+        
+        echo "=== Building talloc ==="
+        python3 ./buildtools/bin/waf build -v || echo "Build failed, checking what happened"
+        
+        echo "=== Build artifacts ==="
+        find . -name "*.o" -o -name "*.a" -o -name "*.so" | head -20
+        
+        echo "=== Installing talloc ==="
+        python3 ./buildtools/bin/waf install || echo "Install failed"
+        
+        echo "=== Installation result ==="
+        ls -la install/ || echo "No install directory"
+        find install/ -type f | head -20
         
         echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
         echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
@@ -146,6 +160,13 @@ TALLOC_SOURCE_EOF
         echo "Using CC: $CC"
         echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
         echo "TALLOC_LIB: $TALLOC_LIB"
+        echo "SYSROOT: $SYSROOT"
+        
+        # Test talloc access
+        echo "=== Testing talloc files ==="
+        ls -la $TALLOC_INCLUDE/ || echo "No include dir"
+        ls -la $TALLOC_LIB/ || echo "No lib dir"
+        
         make -f GNUmakefile clean || true
         make -f GNUmakefile \
           CROSS_COMPILE="$CROSS_COMPILE" \
@@ -154,6 +175,7 @@ TALLOC_SOURCE_EOF
           CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include" \
           LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib -static -ltalloc" \
           V=1
+        
         if [ -f proot ]; then
           echo "✅ Build successful!"
           file proot
@@ -161,6 +183,8 @@ TALLOC_SOURCE_EOF
           chmod +x proot
         else
           echo "❌ Binary not created!"
+          echo "=== Build artifacts ==="
+          find . -name "*.o" | head -10
           exit 1
         fi
 
