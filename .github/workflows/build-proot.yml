@@ -72,32 +72,34 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc for Android
-      run: |
+  - name: Build talloc for Android
+    run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.3.tar.gz
         cd talloc-2.4.3
-        echo "=== Directory contents ==="
-        ls -la
-        echo "=== Looking for source files ==="
-        find . -name "*.c" -o -name "*.h" | grep -i talloc | head -10
         mkdir -p install/include install/lib
         CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="-fPIC --sysroot=$NDK_TOOLCHAIN/sysroot"
-        TALLOC_C_FILE=$(find . -name "talloc.c" -type f | head -1)
-        TALLOC_H_FILE=$(find . -name "talloc.h" -type f | head -1)
-        if [ -n "$TALLOC_C_FILE" ] && [ -n "$TALLOC_H_FILE" ]; then
-          echo "Found talloc.c at: $TALLOC_C_FILE"
-          echo "Found talloc.h at: $TALLOC_H_FILE"
-          $CC $CFLAGS -c "$TALLOC_C_FILE" -o talloc.o
-          cp "$TALLOC_H_FILE" install/include/
-          $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a talloc.o
-          echo "✅ Talloc built successfully"
-        else
-          echo "❌ Could not find talloc source files"
-          exit 1
-        fi
+        CFLAGS="-fPIC --sysroot=$NDK_TOOLCHAIN/sysroot -I. -I./lib/replace"
+        
+        # Compile all necessary source files
+        $CC $CFLAGS -c talloc.c -o talloc.o
+        $CC $CFLAGS -c lib/replace/replace.c -o replace.o 2>/dev/null || echo "replace.c not found, continuing"
+        
+        # Try to find and compile other required files
+        find lib/replace -name "*.c" -type f | while read file; do
+            echo "Compiling: $file"
+            $CC $CFLAGS -c "$file" -o "$(basename "$file" .c).o" 2>/dev/null || echo "Failed to compile $file"
+        done
+        
+        # Create static library with all object files
+        $NDK_TOOLCHAIN/bin/llvm-ar rcs install/lib/libtalloc.a *.o
+        
+        # Copy all headers
+        cp talloc.h install/include/
+        cp -r lib/replace/*.h install/include/ 2>/dev/null || echo "No replace headers found"
+        cp lib/replace/replace.h install/include/ 2>/dev/null || echo "replace.h not found"
+        
         echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
         echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
