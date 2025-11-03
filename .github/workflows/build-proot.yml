@@ -72,75 +72,56 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc with waf and debug
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        
-        echo "=== Downloading talloc ==="
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-        tar xzf talloc-2.4.3.tar.gz
-        cd talloc-2.4.3
-        
-        echo "=== Directory structure ==="
-        ls -la
-        echo "=== Waf files ==="
-        find . -name "waf*" -o -name "*.py" | head -10
-        
-        echo "=== Setting up environment ==="
-        export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-        export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
-        export CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
-        export LDFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
-        
-        echo "CC: $CC"
-        echo "AR: $AR"
-        echo "CFLAGS: $CFLAGS"
-        
-        echo "=== Testing compiler ==="
-        $CC --version || echo "Compiler test failed"
-        
-        echo "=== Creating cross answers file ==="
-        echo "checking for uname sysname... linux" > cross-answers.txt
-        echo "checking for uname machine... ${{ matrix.ndk_triplet }}" >> cross-answers.txt
-        echo "checking for uname release... android" >> cross-answers.txt
-        echo "checking for uname version... android" >> cross-answers.txt
-        echo "checking for C compiler... $CC" >> cross-answers.txt
-        echo "checking for __thread... yes" >> cross-answers.txt
-        echo "checking for large file support... yes" >> cross-answers.txt
-        echo "checking for -D_FILE_OFFSET_BITS=64... yes" >> cross-answers.txt
-        echo "checking for -D_LARGE_FILES... yes" >> cross-answers.txt
-        echo "checking for C99 vsnprintf... yes" >> cross-answers.txt
-        echo "checking for HAVE_ACL_TYPE_EXTENDED... no" >> cross-answers.txt
-        echo "checking for HAVE_AIO_H... no" >> cross-answers.txt
-        echo "checking for HAVE_ATTRIBUTE_DESTRUCTOR... no" >> cross-answers.txt
-        echo "checking for HAVE_ATTRIBUTE_SENTINEL... yes" >> cross-answers.txt
-        
-        echo "=== Running configure (as shell script) ==="
-        ./configure --prefix=$PWD/install --cross-compile --cross-answers=cross-answers.txt --host=${{ matrix.ndk_triplet }} --disable-python
-        
-        echo "=== Configure output ==="
-        cat config.log || echo "No config.log found"
-        
-        echo "=== Building with waf ==="
-        ./buildtools/bin/waf --help || echo "Waf help failed"
-        
-        echo "=== Building talloc ==="
-        ./buildtools/bin/waf build -v || echo "Build failed, checking what happened"
-        
-        echo "=== Build artifacts ==="
-        find . -name "*.o" -o -name "*.a" -o -name "*.so" | head -20
-        
-        echo "=== Installing talloc ==="
-        ./buildtools/bin/waf install || echo "Install failed"
-        
-        echo "=== Installation result ==="
-        ls -la install/ || echo "No install directory"
-        find install/ -type f | head -20
-        
-        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
-
+- name: Build talloc with waf and debug
+  run: |
+    NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+    
+    echo "=== Downloading talloc ==="
+    wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+    tar xzf talloc-2.4.3.tar.gz
+    cd talloc-2.4.3
+    
+    echo "=== Setting up environment ==="
+    export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+    export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
+    export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
+    export CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -D_FILE_OFFSET_BITS=64 -D_LARGE_FILES"
+    export LDFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
+    
+    echo "=== Creating cross answers file ==="
+    echo "checking for uname sysname... linux" > cross-answers.txt
+    echo "checking for uname machine... ${{ matrix.ndk_triplet }}" >> cross-answers.txt
+    echo "checking for uname release... android" >> cross-answers.txt
+    echo "checking for uname version... android" >> cross-answers.txt
+    echo "checking for C compiler... $CC" >> cross-answers.txt
+    echo "checking for __thread... yes" >> cross-answers.txt
+    echo "checking for large file support... yes" >> cross-answers.txt
+    echo "checking for -D_FILE_OFFSET_BITS=64... yes" >> cross-answers.txt
+    echo "checking for -D_LARGE_FILES... yes" >> cross-answers.txt
+    echo "checking for C99 vsnprintf... yes" >> cross-answers.txt
+    echo "checking for HAVE_ACL_TYPE_EXTENDED... no" >> cross-answers.txt
+    echo "checking for HAVE_AIO_H... no" >> cross-answers.txt
+    echo "checking for HAVE_ATTRIBUTE_DESTRUCTOR... no" >> cross-answers.txt
+    echo "checking for HAVE_ATTRIBUTE_SENTINEL... yes" >> cross-answers.txt
+    echo "checking sizeof(off_t)... 8" >> cross-answers.txt
+    echo "checking for getconf LFS_CFLAGS... -D_FILE_OFFSET_BITS=64" >> cross-answers.txt
+    
+    echo "=== Running configure ==="
+    ./configure --prefix=$PWD/install --cross-compile --cross-answers=cross-answers.txt --host=${{ matrix.ndk_triplet }} --disable-python
+    
+    echo "=== Building talloc ==="
+    ./buildtools/bin/waf build -v
+    
+    echo "=== Installing talloc ==="
+    ./buildtools/bin/waf install
+    
+    echo "=== Installation result ==="
+    ls -la install/
+    find install/ -type f
+    
+    echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
+    echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
+    
     - name: Set up NDK environment
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
