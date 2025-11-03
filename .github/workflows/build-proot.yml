@@ -93,30 +93,41 @@ jobs:
         echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
 
-    - name: Build PRoot with NDK and host-built talloc
+    - name: Add bzero compatibility library
+      run: |
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+        mkdir -p bzero-compat
+        cd bzero-compat
+        
+        # Create bzero.c that implements bzero using memset
+        cat > bzero.c << 'EOF'
+#include <string.h>
+void bzero(void *s, size_t n) {
+    memset(s, 0, n);
+}
+EOF
+        
+        # Compile it with NDK
+        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
+        $CC $CFLAGS -c bzero.c -o bzero.o
+        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        
+        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
+
+    - name: Build PRoot with NDK and compatibility libs
       run: |
             cd proot-src/src
-            echo "Building for ${{ matrix.arch }}"
-            echo "Using CC: $CC"
-            echo "TALLOC_INCLUDE: $TALLOC_INCLUDE"
-            echo "TALLOC_LIB: $TALLOC_LIB"
-            
-            # Test if talloc files exist
-            echo "=== Testing talloc access ==="
-            ls -la $TALLOC_INCLUDE/ || echo "Talloc include not found"
-            ls -la $TALLOC_LIB/ || echo "Talloc lib not found"
-            
+            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
+            cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
-            
-            # Build with explicit paths and debug
             make -f GNUmakefile \
                   CROSS_COMPILE="$CROSS_COMPILE" \
                   CC="$CC" \
                   STRIP="$STRIP" \
                   CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L$TALLOC_LIB -L$SYSROOT/usr/lib $TALLOC_LIB/libtalloc.a" \
+                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
                   V=1
-            
             if [ -f proot ]; then
                   echo "✅ Build successful!"
                   file proot
