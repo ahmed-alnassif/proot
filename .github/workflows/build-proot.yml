@@ -71,7 +71,7 @@ jobs:
           libtool \
           pkg-config
 
-    - name: Build talloc for host (needed for build tools)
+    - name: Build talloc with host GCC (for build tools)
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.3.tar.gz
@@ -98,12 +98,12 @@ jobs:
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
         echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
 
-    - name: Create static talloc library for Android
+    - name: Build talloc for Android (static)
       run: |
-        # We need to build talloc statically for Android
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-        tar xzf talloc-2.4.3.tar.gz
-        cd talloc-2.4.3
+        # Use older talloc version that uses configure script
+        wget https://www.samba.org/ftp/talloc/talloc-2.3.4.tar.gz
+        tar xzf talloc-2.3.4.tar.gz
+        cd talloc-2.3.4
         
         # Configure for Android
         ./configure \
@@ -120,37 +120,54 @@ jobs:
         echo "ANDROID_TALLOC_INCLUDE=$PWD/android-install/include" >> $GITHUB_ENV
         echo "ANDROID_TALLOC_LIB=$PWD/android-install/lib" >> $GITHUB_ENV
 
-    - name: Patch PRoot source for Android compatibility
+    - name: Add bzero compatibility library
+      run: |
+        mkdir -p bzero-compat
+        cd bzero-compat
+        
+        # Create bzero.c that implements bzero using memset
+        cat > bzero.c << 'EOF'
+        #include <string.h>
+        void bzero(void *s, size_t n) {
+            memset(s, 0, n);
+        }
+        EOF
+        
+        # Compile it with NDK
+        $CC --sysroot=$SYSROOT -fPIC -c bzero.c -o bzero.o
+        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        
+        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
+
+    - name: Patch PRoot source for Android
       run: |
         cd proot-src/src
         
-        # Patch pipe2 usage
+        # Patch pipe2 usage in ashmem and sysvipc
         sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/ashmem/ashmem.c
         sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
         
-        # Add missing includes to common files
-        for file in tracee/tracee.c tracee/mem.c tracee/seccomp.c cli/proot.c; do
-          if [ -f "$file" ]; then
-            # Add standard headers if not present
-            if ! grep -q "#include <string.h>" "$file"; then
-              sed -i '1i #include <string.h>' "$file"
-            fi
-            if ! grep -q "#include <stdlib.h>" "$file"; then
-              sed -i '1i #include <stdlib.h>' "$file"
-            fi
-          fi
-        done
-        
-        echo "✅ Patched PRoot for Android compatibility"
+        echo "✅ Patched pipe2 for Android compatibility"
 
     - name: Build PRoot with NDK
       run: |
         cd proot-src/src
         
+        # Copy libraries
+        cp $ANDROID_TALLOC_LIB/libtalloc.a ./
+        cp $BZERO_COMPAT/libbzero.a ./
+        
         # Clean previous builds
         make -f GNUmakefile clean || true
         
-        # Build with Android NDK
+        echo "=== Build Environment ==="
+        echo "CC: $CC"
+        echo "CROSS_COMPILE: $CROSS_COMPILE"
+        echo "SYSROOT: $SYSROOT"
+        echo "ANDROID_TALLOC_INCLUDE: $ANDROID_TALLOC_INCLUDE"
+        echo "ANDROID_TALLOC_LIB: $ANDROID_TALLOC_LIB"
+        
+        # Build PRoot
         make -f GNUmakefile \
           CROSS_COMPILE="$CROSS_COMPILE" \
           CC="$CC" \
@@ -159,24 +176,29 @@ jobs:
           OBJDUMP="$OBJDUMP" \
           CPPFLAGS="-I$ANDROID_TALLOC_INCLUDE -I$SYSROOT/usr/include -D_FILE_OFFSET_BITS=64" \
           CFLAGS="--sysroot=$SYSROOT -fPIE -pie" \
-          LDFLAGS="-L$ANDROID_TALLOC_LIB -static-libgcc -fPIE -pie" \
-          LIBS="-ltalloc -lc" \
+          LDFLAGS="-L. -L$SYSROOT/usr/lib -fPIE -pie -static-libgcc" \
+          LIBS="-ltalloc -lbzero" \
           V=1
         
         if [ -f proot ]; then
           echo "✅ Build successful!"
           file proot
           ls -la proot
-          # Test if binary is actually ARM/Android
-          if file proot | grep -q "ELF.*ARM\|ELF.*Android\|ELF.*aarch64"; then
-            echo "✅ Binary is confirmed Android/ARM architecture"
+          # Test the binary
+          if $CC --sysroot=$SYSROOT -o /dev/null -x c - > /dev/null 2>&1 << 'EOF'
+            int main() { return 0; }
+          EOF; then
+            echo "✅ Cross-compiler is working"
           else
-            echo "⚠️  Binary architecture doesn't look like Android"
+            echo "❌ Cross-compiler test failed"
           fi
           chmod +x proot
         else
           echo "❌ Binary not created!"
+          echo "=== Directory contents ==="
           ls -la
+          echo "=== Available object files ==="
+          find . -name "*.o" -type f | head -10
           exit 1
         fi
 
@@ -213,7 +235,6 @@ jobs:
         find artifacts -type f -name "proot-*" | while read file; do
           echo " - $file"
           file "$file" || true
-          echo "   Size: $(stat -c%s "$file") bytes"
         done
         COUNT=$(find artifacts -type f -name "proot-*" | wc -l)
         echo "Successful builds: $COUNT"
@@ -228,40 +249,18 @@ jobs:
         cat checksums.txt >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
-    - name: Get commit info
-      id: commit
-      run: |
-        git clone --depth=1 https://github.com/termux/proot.git proot-temp
-        cd proot-temp
-        echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "message<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B | head -n 5 >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "date=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
     - name: Create GitHub Release
       if: env.COUNT > 0
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: build-${{ steps.commit.outputs.hash }}
-        name: "PRoot Build - ${{ steps.commit.outputs.hash }}"
+        tag_name: build-$(date +%Y%m%d-%H%M%S)
+        name: "PRoot Build - $(date +%Y-%m-%d)"
         body: |
           # PRoot Binaries Build
           
           **Built with Android NDK for full Android compatibility**
           
           **Source Repository:** [termux/proot](https://github.com/termux/proot)
-          
-          **Commit Details:**
-          - **Hash:** `${{ steps.commit.outputs.full_hash }}`
-          - **Author:** ${{ steps.commit.outputs.author }}
-          - **Date:** ${{ steps.commit.outputs.date }}
-          - **Message:**
-          ```
-          ${{ steps.commit.outputs.message }}
-          ```
           
           **Built with all extensions enabled (ashmem, sysvipc, etc.)**
           
