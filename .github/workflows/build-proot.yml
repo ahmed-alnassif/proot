@@ -101,7 +101,7 @@ jobs:
             cd ../..
             mkdir -p talloc-install/include
             # You might need to download talloc.h or extract it from source
-            wget https://raw.githubusercontent.com/Samba/samba/master/lib/talloc/talloc.h -O talloc-install/include/talloc.h || echo "Could not download talloc.h"
+            wget https://raw.githubusercontent.com/samba-team/samba/master/lib/talloc/talloc.h -O talloc-install/include/talloc.h || echo "Could not download talloc.h"
             
             echo "TALLOC_INCLUDE=$PWD/talloc-install/include" >> $GITHUB_ENV
             echo "TALLOC_LIB=$PWD/talloc-install/lib" >> $GITHUB_ENV
