@@ -115,19 +115,30 @@ jobs:
         
         echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
 
-    - name: Patch all bzero usage in PRoot
+    - name: Patch all missing includes in PRoot
       run: |
             cd proot-src/src
             
-            # Find all files using bzero and add strings.h
+            # Add missing standard headers to all C files
             for file in $(find . -name "*.c" -type f); do
-                  if grep -q "bzero" "$file" && ! grep -q "#include <strings.h>" "$file"; then
-                        echo "Patching $file"
-                        sed -i '1i #include <strings.h>' "$file"
+                  # Check what functions are used and add appropriate headers
+                  if grep -q "strcmp\|strcpy\|strlen\|strdup\|memset\|memcpy" "$file" && ! grep -q "#include <string.h>" "$file"; then
+                        echo "Adding string.h to $file"
+                        sed -i '1i #include <string.h>' "$file"
+                  fi
+                  
+                  if grep -q "malloc\|free\|calloc\|realloc" "$file" && ! grep -q "#include <stdlib.h>" "$file"; then
+                        echo "Adding stdlib.h to $file"
+                        sed -i '1i #include <stdlib.h>' "$file"
+                  fi
+                  
+                  if grep -q "printf\|fprintf\|sprintf" "$file" && ! grep -q "#include <stdio.h>" "$file"; then
+                        echo "Adding stdio.h to $file"
+                        sed -i '1i #include <stdio.h>' "$file"
                   fi
             done
             
-            echo "✅ Patched all bzero usage"
+            echo "✅ Patched all missing includes"
 
     - name: Build PRoot with NDK and compatibility libs
       run: |
