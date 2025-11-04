@@ -17,6 +17,7 @@ jobs:
     strategy:
       matrix:
         arch: [arm64-v8a, armeabi-v7a, x86_64, x86]
+        api_level: [21]
     
     steps:
     - name: Checkout code
@@ -25,86 +26,35 @@ jobs:
     - name: Setup Android NDK
       uses: android-actions/setup-android@v3
     
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc make python3
-    
-    - name: Download and extract talloc
-      run: |
-        wget https://www.samba.org/ftp/talloc/talloc-${{ env.TALLOC_VERSION }}.tar.gz
-        tar -xzf talloc-${{ env.TALLOC_VERSION }}.tar.gz
-    
     - name: Find toolchain
       run: |
         PREBUILT_DIR=$(ls -d $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/* | head -1)
         echo "PREBUILT_DIR=$PREBUILT_DIR" >> $GITHUB_ENV
         echo "TOOLCHAIN=$PREBUILT_DIR" >> $GITHUB_ENV
     
-    - name: Build talloc for Android
+    - name: Build talloc
       run: |
-        cd talloc-${{ env.TALLOC_VERSION }}
-        
-        # Set compiler based on architecture
-        case "${{ matrix.arch }}" in
-          "arm64-v8a")
-            clang_name="aarch64-linux-android21-clang"
-            target="aarch64-linux-android"
-            ;;
-          "armeabi-v7a")
-            clang_name="armv7a-linux-androideabi21-clang"
-            target="armv7a-linux-androideabi"
-            ;;
-          "x86_64")
-            clang_name="x86_64-linux-android21-clang"
-            target="x86_64-linux-android"
-            ;;
-          "x86")
-            clang_name="i686-linux-android21-clang"
-            target="i686-linux-android"
-            ;;
-        esac
-        
-        export ANDROID_CC="$TOOLCHAIN/bin/$clang_name"
-        export ANDROID_AR="$TOOLCHAIN/bin/llvm-ar"
-        export ANDROID_RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
-        export ANDROID_STRIP="$TOOLCHAIN/bin/llvm-strip"
-        
-        echo "Using Android compiler: $ANDROID_CC"
-        
-
-        # Clean any previous builds
-        make distclean 2>/dev/null || true
-        rm -rf bin/ build/ 2>/dev/null || true
-        
-        # Build for Android directly
-        echo "Building for Android..."
-        CC="$ANDROID_CC" \
-        AR="$ANDROID_AR" \
-        RANLIB="$ANDROID_RANLIB" \
-        ./configure \
-          --cross-compile \
-          --cross-answers=android.txt \
-          --host=$target \
-          --prefix=$PWD/install/${{ matrix.arch }} \
-          --disable-python \
-          --bundled-libraries=ALL \
-          --check-c-compiler="$ANDROID_CC"
-        
-        make -j$(nproc)
-        make install
-        
-        # Verify the build
-        echo "Build contents:"
-        find install/${{ matrix.arch }} -type f -name "*.a" -o -name "*.so" | xargs file || true
+        chmod +x talloc-patches/build-talloc.sh
+        ./talloc-patches/build-talloc.sh ${{ matrix.arch }} ${{ matrix.api_level }}
     
     - name: Package artifacts
       run: |
-        cd talloc-${{ env.TALLOC_VERSION }}
-        tar -czf talloc-${{ env.TALLOC_VERSION }}-android-${{ matrix.arch }}.tar.gz -C install/${{ matrix.arch }} .
+        cd install
+        tar -czf talloc-${{ env.TALLOC_VERSION }}-android-${{ matrix.arch }}-api${{ matrix.api_level }}.tar.gz -C ${{ matrix.arch }} .
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}
-        path: talloc-${{ env.TALLOC_VERSION }}/talloc-${{ env.TALLOC_VERSION }}-android-${{ matrix.arch }}.tar.gz
+        name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-api${{ matrix.api_level }}
+        path: install/talloc-${{ env.TALLOC_VERSION }}-android-${{ matrix.arch }}-api${{ matrix.api_level }}.tar.gz
+
+  # Build all architectures in one job
+  build-all:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+    
