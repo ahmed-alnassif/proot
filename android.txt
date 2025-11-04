@@ -1,0 +1,13 @@
+arm64-v8a:REAL_ARCH=aarch64
+armeabi-v7a:REAL_ARCH=arm
+x86_64:REAL_ARCH=x86_64
+x86:REAL_ARCH=x86
+
+ac_cv_func_mmap_anon=yes
+ac_cv_func_mmap_file=yes
+ac_cv_header_sys_mman_h=yes
+ac_cv_type___uint16_t=yes
+ac_cv_type___uint32_t=yes
+ac_cv_type___uint64_t=yes
+ac_cv_type___uint8_t=yes
+ac_cv_header_stdc=yes
