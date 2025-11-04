@@ -1,4 +1,4 @@
-name: Build talloc for Multiple Architectures
+name: Build Multi-arch with System Talloc
 
 on:
   push:
@@ -7,86 +7,72 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  TALLOC_VERSION: '2.4.3'
-
 jobs:
   build-multi-arch:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [x86_64, i686, aarch64, armv7l]
-      fail-fast: false
+        arch: [amd64, i386, arm64, armhf]
+        fail-fast: false
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install cross-compiler for ${{ matrix.arch }}
+    - name: Enable multi-arch and install talloc
       run: |
+        sudo dpkg --add-architecture ${{ matrix.arch }}
         sudo apt-get update
-        sudo apt-get install -y wget build-essential python3
         
+        # Install talloc for the target architecture
         case "${{ matrix.arch }}" in
-          "x86_64")
-            sudo apt-get install -y gcc g++
+          "amd64")
+            sudo apt-get install -y libtalloc-dev:amd64
             ;;
-          "i686")
-            sudo apt-get install -y gcc-multilib g++-multilib
+          "i386")
+            sudo apt-get install -y libtalloc-dev:i386
             ;;
-          "aarch64")
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          "arm64")
+            sudo apt-get install -y libtalloc-dev:arm64
             ;;
-          "armv7l")
-            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+          "armhf")
+            sudo apt-get install -y libtalloc-dev:armhf
             ;;
         esac
+        
+        # Verify
+        pkg-config --cflags talloc
+        pkg-config --libs talloc
     
-    - name: Build talloc for ${{ matrix.arch }}
+    - name: Build for ${{ matrix.arch }}
       run: |
-        wget https://www.samba.org/ftp/talloc/talloc-${{ env.TALLOC_VERSION }}.tar.gz
-        tar xzf talloc-${{ env.TALLOC_VERSION }}.tar.gz
-        cd talloc-${{ env.TALLOC_VERSION }}
-        
         case "${{ matrix.arch }}" in
-          "x86_64")
-            export CC="gcc"
-            export HOST="x86_64-linux-gnu"
-            CONFIGURE_FLAGS=""
+          "amd64")
+            CC="gcc"
+            TARGET="x86_64-linux-gnu"
             ;;
-          "i686")
-            export CC="gcc"
-            export CFLAGS="-m32 -D_FILE_OFFSET_BITS=64"
-            export LDFLAGS="-m32"
-            export HOST="i686-linux-gnu"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+          "i386")
+            CC="gcc -m32"
+            TARGET="i686-linux-gnu"
             ;;
-          "aarch64")
-            export CC="aarch64-linux-gnu-gcc"
-            export HOST="aarch64-linux-gnu"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+          "arm64")
+            CC="aarch64-linux-gnu-gcc"
+            TARGET="aarch64-linux-gnu"
             ;;
-          "armv7l")
-            export CC="arm-linux-gnueabihf-gcc"
-            export HOST="arm-linux-gnueabihf"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+          "armhf")
+            CC="arm-linux-gnueabihf-gcc"
+            TARGET="arm-linux-gnueabihf"
             ;;
         esac
         
-        echo "Building for ${{ matrix.arch }} with CC=$CC"
-        echo "HOST: $HOST"
-        echo "Configure flags: $CONFIGURE_FLAGS"
+        # Build your project
+        $CC -o myapp-${{ matrix.arch }} main.c `pkg-config --cflags --libs talloc`
         
-        # Configure and build
-        ./configure --prefix=$PWD/install --disable-python $CONFIGURE_FLAGS
-        make
-        make install
-        
-        echo "Build successful for ${{ matrix.arch }}!"
-        file install/lib/libtalloc.* || ls -la install/lib/
+        # Verify binary
+        file myapp-${{ matrix.arch }}
     
-    - name: Upload ${{ matrix.arch }} artifacts
+    - name: Upload ${{ matrix.arch }} binary
       uses: actions/upload-artifact@v4
       with:
-        name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}
-        path: talloc-${{ env.TALLOC_VERSION }}/install/**
+        name: myapp-${{ matrix.arch }}
+        path: myapp-${{ matrix.arch }}
