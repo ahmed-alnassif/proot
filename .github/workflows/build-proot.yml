@@ -1,4 +1,4 @@
-lname: Build TALLOC with NDK
+name: Build TALLOC with NDK
 
 on:
   workflow_dispatch:
