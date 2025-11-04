@@ -181,7 +181,7 @@ jobs:
       run: |
             cd proot-src/src
             $OBJCOPY --redefine-sym __register_atfork=register_atfork $TALLOC_LIB/libtalloc.so.2 libtalloc.o
-            $AR rcs libtalloc.a libtalloc.o
+            $NDK_TOOLCHAIN/bin/llvm-ar rcs libtalloc.a libtalloc.o
             cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
             make -f GNUmakefile \
