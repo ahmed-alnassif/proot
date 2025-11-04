@@ -72,17 +72,6 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc with host GCC
-      run: |
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-        tar xzf talloc-2.4.3.tar.gz
-        cd talloc-2.4.3
-        ./configure --prefix=$PWD/install --disable-python
-        make
-        make install
-        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
-
     - name: Set up NDK environment
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -98,6 +87,25 @@ jobs:
         echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
         echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
+
+    - name: Build talloc for Android target
+      run: |
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+        tar xzf talloc-2.4.3.tar.gz
+        cd talloc-2.4.3
+        
+        # Build talloc for the Android target architecture
+        ./configure \
+          --host=${{ matrix.ndk_triplet }} \
+          --prefix=$PWD/android-install \
+          CC="$CC" \
+          CFLAGS="--sysroot=$SYSROOT" \
+          --disable-python
+        
+        make
+        make install
+        echo "ANDROID_TALLOC_INCLUDE=$PWD/android-install/include" >> $GITHUB_ENV
+        echo "ANDROID_TALLOC_LIB=$PWD/android-install/lib" >> $GITHUB_ENV
 
     - name: Add bzero compatibility library
       run: |
@@ -151,10 +159,11 @@ jobs:
             sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
             echo "✅ Patched pipe2 for Android compatibility"
 
-    - name: Build PRoot with NDK tools (FIXED OBJCOPY/OBJDUMP)
+    - name: Build PRoot with NDK tools
       run: |
             cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
+            # Use the Android-built talloc instead of host-built
+            cp $ANDROID_TALLOC_LIB/libtalloc.a ./
             cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
             make -f GNUmakefile \
@@ -163,7 +172,7 @@ jobs:
                   STRIP="$STRIP" \
                   OBJDUMP="$OBJDUMP" \
                   OBJCOPY="$OBJCOPY" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
+                  CPPFLAGS="-I$ANDROID_TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
                   LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
                   V=1
             if [ -f proot ]; then
