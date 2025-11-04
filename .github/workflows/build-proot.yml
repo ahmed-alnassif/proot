@@ -1,108 +1,98 @@
-name: Build talloc for Multiple Architectures
+name: Build talloc Direct Compilation
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 env:
   TALLOC_VERSION: '2.4.3'
 
 jobs:
-  build-multi-arch:
+  build-direct:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         arch: [x86_64, i686, aarch64, armv7l]
-      fail-fast: false
+        fail-fast: false
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install cross-compilers
+    - name: Install cross-compiler for ${{ matrix.arch }}
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget build-essential python3
+        sudo apt-get install -y wget build-essential
         
-        # Install cross-compilers based on architecture
         case "${{ matrix.arch }}" in
           "x86_64")
-            sudo apt-get install -y gcc g++
+            sudo apt-get install -y gcc g++ binutils
             ;;
           "i686")
-            sudo apt-get install -y gcc-multilib g++-multilib
+            sudo apt-get install -y gcc-multilib g++-multilib binutils
             ;;
           "aarch64")
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
             ;;
           "armv7l")
-            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
             ;;
         esac
     
-    - name: Build talloc for ${{ matrix.arch }}
+    - name: Build talloc directly for ${{ matrix.arch }}
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-${{ env.TALLOC_VERSION }}.tar.gz
         tar xzf talloc-${{ env.TALLOC_VERSION }}.tar.gz
         cd talloc-${{ env.TALLOC_VERSION }}
         
-        # Set compiler and flags based on architecture
         case "${{ matrix.arch }}" in
           "x86_64")
-            export CC="gcc"
-            export CFLAGS=""
-            export HOST="x86_64-linux-gnu"
-            CONFIGURE_FLAGS=""
+            CC="gcc"
+            AR="ar"
+            RANLIB="ranlib"
+            CFLAGS="-fPIC -O2 -D_GNU_SOURCE"
             ;;
           "i686")
-            export CC="gcc"
-            export CFLAGS="-m32 -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE"
-            export LDFLAGS="-m32"
-            export HOST="i686-linux-gnu"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+            CC="gcc"
+            AR="ar"
+            RANLIB="ranlib"
+            CFLAGS="-fPIC -O2 -D_GNU_SOURCE -m32 -D_FILE_OFFSET_BITS=64"
             ;;
           "aarch64")
-            export CC="aarch64-linux-gnu-gcc"
-            export CFLAGS=""
-            export HOST="aarch64-linux-gnu"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+            CC="aarch64-linux-gnu-gcc"
+            AR="aarch64-linux-gnu-ar"
+            RANLIB="aarch64-linux-gnu-ranlib"
+            CFLAGS="-fPIC -O2 -D_GNU_SOURCE"
             ;;
           "armv7l")
-            export CC="arm-linux-gnueabihf-gcc"
-            export CFLAGS=""
-            export HOST="arm-linux-gnueabihf"
-            CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
+            CC="arm-linux-gnueabihf-gcc"
+            AR="arm-linux-gnueabihf-ar"
+            RANLIB="arm-linux-gnueabihf-ranlib"
+            CFLAGS="-fPIC -O2 -D_GNU_SOURCE"
             ;;
         esac
         
-        echo "Building for ${{ matrix.arch }} with CC=$CC"
-        echo "CFLAGS: $CFLAGS"
-        echo "Configure flags: $CONFIGURE_FLAGS"
+        echo "Building talloc directly for ${{ matrix.arch }} using $CC"
         
-        # Configure and build
-        ./configure --prefix=$PWD/install --disable-python $CONFIGURE_FLAGS
+        # Compile talloc directly
+        $CC $CFLAGS -I. -c talloc.c -o talloc.o
+        $AR rcs libtalloc.a talloc.o
+        $RANLIB libtalloc.a
         
-        make
-        make install
+        # Create install directory
+        mkdir -p install/lib
+        mkdir -p install/include
         
-        # Set environment variables for this step
-        echo "TALLOC_INCLUDE_${{ matrix.arch }}=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB_${{ matrix.arch }}=$PWD/install/lib" >> $GITHUB_ENV
+        # Copy files
+        cp libtalloc.a install/lib/
+        cp talloc.h install/include/
         
-        # Verify the build
-        echo "Build verification:"
-        file install/lib/libtalloc.* || ls -la install/lib/
-    
-    - name: Package and upload ${{ matrix.arch }} artifacts
-      run: |
-        cd talloc-${{ env.TALLOC_VERSION }}
-        tar -czf ../talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz -C install .
+        # Verify
+        echo "Build verification for ${{ matrix.arch }}:"
+        file install/lib/libtalloc.a
+        echo "Build successful for ${{ matrix.arch }}!"
     
     - name: Upload ${{ matrix.arch }} artifacts
       uses: actions/upload-artifact@v4
       with:
         name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}
-        path: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz
+        path: talloc-${{ env.TALLOC_VERSION }}/install/**
