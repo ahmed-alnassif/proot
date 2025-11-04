@@ -72,28 +72,29 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc for Android
+    - name: Build talloc for Android (Waf cross-compile)
       run: |
             wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
             tar xzf talloc-2.4.3.tar.gz
             cd talloc-2.4.3
 
             NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-
             export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
             export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
             export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
-            export LD="$CC"
             export CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
             export LDFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot"
 
+            # Load the Waf local build tool
             ./configure \
-                  --host=${{ matrix.ndk_triplet }} \
+                  --cross-compile \
+                  --disable-python \
                   --prefix=$PWD/install \
-                  --disable-python
+                  --build-type=release
 
-            make -j$(nproc)
-            make install
+            # Build *without running test binaries*
+            ./waf build -j$(nproc)
+            ./waf install
 
             echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
             echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
