@@ -115,13 +115,34 @@ jobs:
         
         echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
 
-    - name: Patch pipe2 usage in PRoot
+    - name: Patch all missing includes in PRoot
       run: |
             cd proot-src/src
             
-            # Replace pipe2 with pipe + fcntl for Android compatibility
-            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
+            # Use a more reliable method to add headers
+            for file in $(find . -name "*.c" -type f); do
+                  echo "Patching $file"
+                  
+                  # Create a temporary file with headers
+                  {
+                        echo "#include <string.h>"
+                        echo "#include <stdlib.h>" 
+                        echo "#include <stdio.h>"
+                        echo "#include <strings.h>"
+                        echo "#include <unistd.h>"
+                        echo "#include <fcntl.h>"
+                        cat "$file"
+                  } > "${file}.tmp"
+                  
+                  mv "${file}.tmp" "$file"
+            done
             
+            echo "✅ Added all standard headers to all C files"
+
+    - name: Patch pipe2 usage in PRoot
+      run: |
+            cd proot-src/src
+            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
             echo "✅ Patched pipe2 for Android compatibility"
 
     - name: Build PRoot with NDK and compatibility libs
