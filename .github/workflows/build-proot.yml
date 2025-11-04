@@ -58,7 +58,7 @@ jobs:
         echo "SYSROOT: $SYSROOT"
         
         # Use waf build system
-        python3 ../configure --prefix=$PWD/install --disable-python \
+        ../configure --prefix=$PWD/install --disable-python \
           --cross-compile \
           --cross-answers=android.txt \
           CC="$CC" \
