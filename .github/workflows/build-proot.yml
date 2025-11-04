@@ -16,7 +16,7 @@ jobs:
         ndk-version: r25b
         add-to-path: true
 
-    - name: Install basic build tools
+    - name: Install cross-compilers
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -27,19 +27,9 @@ jobs:
           automake \
           libtool \
           pkg-config \
-          python3
-
-    - name: Set NDK environment variables for aarch64
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        TRIPLET="aarch64-linux-android"
-        CC="$NDK_TOOLCHAIN/bin/${TRIPLET}21-clang"
-        SYSROOT="$NDK_TOOLCHAIN/sysroot"
-        
-        echo "CC=$CC" >> $GITHUB_ENV
-        echo "SYSROOT=$SYSROOT" >> $GITHUB_ENV
-        echo "TRIPLET=$TRIPLET" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
+          python3 \
+          gcc-aarch64-linux-gnu \
+          g++-aarch64-linux-gnu
 
     - name: Download and extract talloc
       run: |
@@ -47,83 +37,65 @@ jobs:
         tar xzf talloc-2.4.3.tar.gz
         echo "TALLOC_DIR=$PWD/talloc-2.4.3" >> $GITHUB_ENV
 
-    - name: Attempt 1 - Build talloc with NDK using waf
+    - name: Attempt 1 - Build with NDK compiler
       run: |
         cd $TALLOC_DIR
-        mkdir -p build-attempt1
-        cd build-attempt1
+        mkdir -p build-ndk
+        cd build-ndk
         
-        echo "=== Attempt 1: Waf build with NDK ==="
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+        CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang"
+        SYSROOT="$NDK_TOOLCHAIN/sysroot"
+        
+        echo "=== Attempt 1: NDK Compiler ==="
         echo "CC: $CC"
-        echo "SYSROOT: $SYSROOT"
         
-        # Use waf build system
         ../configure --prefix=$PWD/install --disable-python \
-          --cross-compile \
-          --cross-answers=android.txt \
           CC="$CC" \
           CFLAGS="--sysroot=$SYSROOT" \
           LDFLAGS="--sysroot=$SYSROOT"
         
-        python3 ../buildtools/bin/waf build || echo "❌ Attempt 1 build failed"
-        python3 ../buildtools/bin/waf install || echo "❌ Attempt 1 install failed"
+        make || echo "❌ NDK build failed"
+        make install || echo "❌ NDK install failed"
 
-    - name: Attempt 2 - Use older talloc with configure script
-      run: |
-        # Try older talloc version that uses configure
-        wget https://www.samba.org/ftp/talloc/talloc-2.3.4.tar.gz
-        tar xzf talloc-2.3.4.tar.gz
-        cd talloc-2.3.4
-        mkdir -p build
-        cd build
-        
-        echo "=== Attempt 2: Older talloc (2.3.4) with configure ==="
-        
-        ../configure --prefix=$PWD/install --disable-python \
-          --host=aarch64-linux-android \
-          --enable-static \
-          --disable-shared \
-          CC="$CC" \
-          CFLAGS="--sysroot=$SYSROOT -fPIC" \
-          LDFLAGS="--sysroot=$SYSROOT"
-        
-        make || echo "❌ Attempt 2 failed"
-        make install || echo "❌ Attempt 2 install failed"
-
-    - name: Attempt 3 - Manual static build with NDK
+    - name: Attempt 2 - Build with aarch64-linux-gnu compiler
       run: |
         cd $TALLOC_DIR
-        mkdir -p build-attempt3
-        cd build-attempt3
+        mkdir -p build-aarch64-gcc
+        cd build-aarch64-gcc
         
-        echo "=== Attempt 3: Manual static compilation ==="
+        echo "=== Attempt 2: aarch64-linux-gnu-gcc ==="
         
-        # Find and compile all talloc source files
-        find ../lib -name "*.c" -type f | while read file; do
-          echo "Compiling $file"
-          filename=$(basename "$file" .c)
-          $CC --sysroot=$SYSROOT -fPIC -I../ -I$SYSROOT/usr/include -c "$file" -o "${filename}.o" || echo "Failed: $file"
-        done
+        ../configure --prefix=$PWD/install --disable-python \
+          --host=aarch64-linux-gnu \
+          CC="aarch64-linux-gnu-gcc"
         
-        # Create static library
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs libtalloc.a *.o || echo "❌ AR failed"
+        make || echo "❌ aarch64-gcc build failed"
+        make install || echo "❌ aarch64-gcc install failed"
+
+    - name: Attempt 3 - Build with host compiler for aarch64 target
+      run: |
+        cd $TALLOC_DIR
+        mkdir -p build-host-aarch64
+        cd build-host-aarch64
         
-        # Create include directory structure
-        mkdir -p install/include install/lib
-        cp ../talloc.h install/include/
-        cp libtalloc.a install/lib/
+        echo "=== Attempt 3: Host GCC for aarch64 ==="
         
-        ls -la install/ || echo "No install created"
+        ../configure --prefix=$PWD/install --disable-python \
+          --host=aarch64-linux-gnu \
+          CC="gcc"
+        
+        make || echo "❌ Host GCC aarch64 build failed"
+        make install || echo "❌ Host GCC aarch64 install failed"
 
     - name: Check results
       run: |
-        echo "=== Build Results ==="
+        echo "=== Build Results for aarch64 ==="
         
-        # Check Attempt 1 (waf)
-        echo "Attempt 1 (waf):"
-        if [ -d "$TALLOC_DIR/build-attempt1/install" ]; then
+        echo "Attempt 1 (NDK):"
+        if [ -d "$TALLOC_DIR/build-ndk/install" ]; then
           echo "✅ Success"
-          find "$TALLOC_DIR/build-attempt1/install" -name "*.a" -o -name "*.so" | while read file; do
+          find "$TALLOC_DIR/build-ndk/install" -name "*.a" -o -name "*.so" | while read file; do
             echo "  - $(basename $file)"
             file "$file" || true
           done
@@ -131,11 +103,10 @@ jobs:
           echo "❌ Failed"
         fi
         
-        # Check Attempt 2 (older talloc)
-        echo "Attempt 2 (talloc-2.3.4):"
-        if [ -d "talloc-2.3.4/build/install" ]; then
+        echo "Attempt 2 (aarch64-linux-gnu-gcc):"
+        if [ -d "$TALLOC_DIR/build-aarch64-gcc/install" ]; then
           echo "✅ Success"
-          find "talloc-2.3.4/build/install" -name "*.a" -o -name "*.so" | while read file; do
+          find "$TALLOC_DIR/build-aarch64-gcc/install" -name "*.a" -o -name "*.so" | while read file; do
             echo "  - $(basename $file)"
             file "$file" || true
           done
@@ -143,11 +114,10 @@ jobs:
           echo "❌ Failed"
         fi
         
-        # Check Attempt 3 (manual)
-        echo "Attempt 3 (manual):"
-        if [ -d "$TALLOC_DIR/build-attempt3/install" ]; then
+        echo "Attempt 3 (Host GCC aarch64):"
+        if [ -d "$TALLOC_DIR/build-host-aarch64/install" ]; then
           echo "✅ Success"
-          find "$TALLOC_DIR/build-attempt3/install" -name "*.a" -o -name "*.so" | while read file; do
+          find "$TALLOC_DIR/build-host-aarch64/install" -name "*.a" -o -name "*.so" | while read file; do
             echo "  - $(basename $file)"
             file "$file" || true
           done
@@ -158,8 +128,7 @@ jobs:
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: talloc-aarch64-builds
+        name: talloc-aarch64-debug
         path: |
           $TALLOC_DIR/build-*/install
-          talloc-2.3.4/build/install
         retention-days: 1
