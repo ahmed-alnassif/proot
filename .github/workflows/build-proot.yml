@@ -72,63 +72,39 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc for Android using Docker
+    - name: Build talloc for Android using Docker multi-arch
       run: |
-        # Create a simple script to build talloc statically for Android
-        cat > build-talloc-android.sh << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        ARCH=$1
-        NDK_TOOLCHAIN=$2
-        
-        echo "Building talloc for $ARCH using NDK toolchain"
-        
-        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-        tar xzf talloc-2.4.3.tar.gz
-        cd talloc-2.4.3
-        
-        # Set compiler based on architecture
-        case "$ARCH" in
-          "aarch64")
-            CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang"
-            AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            ;;
-          "arm")
-            CC="$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi21-clang"
-            AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            ;;
-          "i686")
-            CC="$NDK_TOOLCHAIN/bin/i686-linux-android21-clang"
-            AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            ;;
-          "x86_64")
-            CC="$NDK_TOOLCHAIN/bin/x86_64-linux-android21-clang"
-            AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            ;;
-        esac
-        
-        # Direct compilation - no configure script issues
-        $CC -fPIC -O2 -D_GNU_SOURCE -I. -c talloc.c -o talloc.o
-        $AR rcs libtalloc.a talloc.o
-        
-        mkdir -p install/lib install/include
-        cp libtalloc.a install/lib/
-        cp talloc.h install/include/
-        
-        echo "TALLOC_BUILD_DIR=$PWD" >> $GITHUB_ENV
-        echo "Build complete for $ARCH"
-        file install/lib/libtalloc.a
-        EOF
-        
-        chmod +x build-talloc-android.sh
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        ./build-talloc-android.sh ${{ matrix.arch }} "$NDK_TOOLCHAIN"
-        
-        # Set environment variables
-        echo "TALLOC_INCLUDE=$PWD/talloc-2.4.3/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/talloc-2.4.3/install/lib" >> $GITHUB_ENV
-
+            # Clean any existing talloc build
+            rm -rf talloc-2.4.3
+            
+            case "${{ matrix.arch }}" in
+                  "aarch64")
+                        docker run --rm --platform linux/arm64 -v $(pwd):/workspace ubuntu:22.04 \
+                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        ;;
+                  "arm")
+                        docker run --rm --platform linux/arm/v7 -v $(pwd):/workspace ubuntu:22.04 \
+                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        ;;
+                  "i686")
+                        docker run --rm --platform linux/386 -v $(pwd):/workspace ubuntu:22.04 \
+                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        ;;
+                  "x86_64")
+                        docker run --rm --platform linux/amd64 -v $(pwd):/workspace ubuntu:22.04 \
+                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        ;;
+            esac
+            
+            # The built talloc is now in talloc-install/ on the host
+            echo "TALLOC_INCLUDE=$PWD/talloc-install/include" >> $GITHUB_ENV
+            echo "TALLOC_LIB=$PWD/talloc-install/lib" >> $GITHUB_ENV
+            
+            # Verify the files exist
+            echo "Talloc build verification:"
+            ls -la $PWD/talloc-install/include/
+            ls -la $PWD/talloc-install/lib/
+    
     - name: Set up NDK environment
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -197,17 +173,12 @@ jobs:
             sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
             echo "✅ Patched pipe2 for Android compatibility"
 
-    - name: Build PRoot with NDK tools
+    - name: Build PRoot with NDK tools (FIXED OBJCOPY/OBJDUMP)
       run: |
             cd proot-src/src
-            
-            # Copy our built talloc library
-            cp $TALLOC_LIB/libtalloc.a ./
+            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
             cp $BZERO_COMPAT/libbzero.a ./
-            
             make -f GNUmakefile clean || true
-            
-            # Build with proper flags
             make -f GNUmakefile \
                   CROSS_COMPILE="$CROSS_COMPILE" \
                   CC="$CC" \
@@ -215,9 +186,8 @@ jobs:
                   OBJDUMP="$OBJDUMP" \
                   OBJCOPY="$OBJCOPY" \
                   CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -static -ltalloc -lbzero" \
+                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
                   V=1
-                  
             if [ -f proot ]; then
                   echo "✅ Build successful!"
                   file proot
