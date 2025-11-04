@@ -1,4 +1,4 @@
-name: Build TALLOC with NDK
+lname: Build TALLOC with NDK
 
 on:
   workflow_dispatch:
@@ -38,23 +38,18 @@ jobs:
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang"
         SYSROOT="$NDK_TOOLCHAIN/sysroot"
-        AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-        RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
         
         echo "=== Building talloc for aarch64 with NDK ==="
         echo "CC: $CC"
-        echo "AR: $AR"
         
-        # Use waf build system with NDK toolchain
+        # Use the configure script which will call waf properly
         CC="$CC" \
-        AR="$AR" \
-        RANLIB="$RANLIB" \
         CFLAGS="--sysroot=$SYSROOT -fPIC" \
         LDFLAGS="--sysroot=$SYSROOT" \
-        ./buildtools/bin/waf configure --prefix=$PWD/install-ndk --disable-python --cross-compile
+        ./configure --prefix=$PWD/install-ndk --disable-python --cross-compile
         
-        ./buildtools/bin/waf build
-        ./buildtools/bin/waf install
+        make
+        make install
 
     - name: Verify the build
       run: |
