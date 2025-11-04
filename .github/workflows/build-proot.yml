@@ -21,10 +21,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install cross-compilers
+    - name: Install cross-compilers and QEMU
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget build-essential python3 file
+        sudo apt-get install -y wget build-essential python3 file \
+          qemu-user-static binfmt-support
         
         # Install cross-compilers individually
         case "${{ matrix.arch }}" in
@@ -32,7 +33,7 @@ jobs:
             sudo apt-get install -y gcc g++
             ;;
           "i686")
-            sudo apt-get install -y gcc-i686-linux-gnu g++-i686-linux-gnu
+            sudo apt-get install -y gcc-multilib g++-multilib
             ;;
           "aarch64")
             sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
@@ -41,6 +42,9 @@ jobs:
             sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             ;;
         esac
+        
+        # Enable QEMU for running cross-compiled binaries during configure
+        docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
     
     - name: Download talloc
       run: |
@@ -56,52 +60,50 @@ jobs:
             export CC="gcc"
             export HOST="x86_64-linux-gnu"
             CROSS_COMPILE=""
-            ANDROID_ARCH="x86_64"
             ;;
           "i686")
-            export CC="i686-linux-gnu-gcc"
+            export CC="gcc"
             export HOST="i686-linux-gnu"
+            export CFLAGS="-m32"
+            export LDFLAGS="-m32"
             CROSS_COMPILE="--cross-compile"
-            ANDROID_ARCH="x86"
             ;;
           "aarch64")
             export CC="aarch64-linux-gnu-gcc"
             export HOST="aarch64-linux-gnu"
             CROSS_COMPILE="--cross-compile"
-            ANDROID_ARCH="arm64-v8a"
             ;;
           "armv7l")
             export CC="arm-linux-gnueabihf-gcc"
             export HOST="arm-linux-gnueabihf"
             CROSS_COMPILE="--cross-compile"
-            ANDROID_ARCH="armeabi-v7a"
             ;;
         esac
         
         echo "Building for ${{ matrix.arch }}"
         echo "CC: $CC"
         echo "HOST: $HOST"
-        echo "CROSS_COMPILE: $CROSS_COMPILE"
-        echo "ANDROID_ARCH: $ANDROID_ARCH"
         
         # Clean previous build
         make distclean 2>/dev/null || true
         rm -rf bin/ build/ 2>/dev/null || true
         
-        # Configure with your android.txt
+        # For cross-compilation, use the cross-answers file and skip execution tests
         if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          # Native build doesn't need cross-compilation
+          # Native build
           ./configure \
             --disable-python \
             --prefix=$PWD/install/${{ matrix.arch }}
         else
-          # Cross-compilation with your android.txt
+          # Cross-compilation with extensive answers to skip execution tests
           ./configure \
             --host=$HOST \
             --disable-python \
             --prefix=$PWD/install/${{ matrix.arch }} \
             --cross-compile \
-            --cross-answers=../android.txt
+            --cross-answers=../android.txt \
+            --disable-rpath \
+            --bundled-libraries=ALL
         fi
         
         # Build and install
