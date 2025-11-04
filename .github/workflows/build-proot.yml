@@ -120,7 +120,7 @@ jobs:
             cd proot-src/src
             for file in $(find . -name "*.c" -type f); do
                   echo "Patching $file"
-                  HEADER_CONTENT="#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <strings.h>"
+                  HEADER_CONTENT="#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <strings.h>\n#include <unistd.h>\n#include <fcntl.h>"
                   echo -e "$HEADER_CONTENT" | cat - "$file" > temp_file.c
                   mv temp_file.c "$file"
             done
