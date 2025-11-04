@@ -180,7 +180,8 @@ jobs:
     - name: Build PRoot with NDK tools (FIXED OBJCOPY/OBJDUMP)
       run: |
             cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2 ./libtalloc.a
+            $OBJCOPY --redefine-sym __register_atfork=register_atfork $TALLOC_LIB/libtalloc.so.2 libtalloc.o
+            $AR rcs libtalloc.a libtalloc.o
             cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
             make -f GNUmakefile \
@@ -190,7 +191,7 @@ jobs:
                   OBJDUMP="$OBJDUMP" \
                   OBJCOPY="$OBJCOPY" \
                   CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
+                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero -Wl,--allow-multiple-definition" \
                   V=1
             if [ -f proot ]; then
                   echo "✅ Build successful!"
