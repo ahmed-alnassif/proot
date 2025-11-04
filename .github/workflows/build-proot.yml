@@ -115,16 +115,14 @@ jobs:
         
         echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
 
-    - name: Patch all missing includes in PRoot
+    - name: Patch pipe2 usage in PRoot
       run: |
             cd proot-src/src
-            for file in $(find . -name "*.c" -type f); do
-                  echo "Patching $file"
-                  HEADER_CONTENT="#include <string.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <strings.h>\n#include <unistd.h>\n#include <fcntl.h>"
-                  echo -e "$HEADER_CONTENT" | cat - "$file" > temp_file.c
-                  mv temp_file.c "$file"
-            done
-            echo "✅ Added all standard headers to all C files"
+            
+            # Replace pipe2 with pipe + fcntl for Android compatibility
+            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
+            
+            echo "✅ Patched pipe2 for Android compatibility"
 
     - name: Build PRoot with NDK and compatibility libs
       run: |
