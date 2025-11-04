@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  TALLOC_VERSION: '2.4.0'
+  TALLOC_VERSION: '2.4.3'
 
 jobs:
   build-multi-arch:
@@ -21,13 +21,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install cross-compilers and QEMU
+    - name: Install cross-compilers
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget build-essential python3 file \
-          qemu-user-static binfmt-support
+        sudo apt-get install -y wget build-essential python3
         
-        # Install cross-compilers individually
+        # Install cross-compilers based on architecture
         case "${{ matrix.arch }}" in
           "x86_64")
             sudo apt-get install -y gcc g++
@@ -42,85 +41,64 @@ jobs:
             sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
             ;;
         esac
-        
-        # Enable QEMU for running cross-compiled binaries during configure
-        docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
     
-    - name: Download talloc
+    - name: Build talloc for ${{ matrix.arch }}
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-${{ env.TALLOC_VERSION }}.tar.gz
-        tar -xzf talloc-${{ env.TALLOC_VERSION }}.tar.gz
-    
-    - name: Build for ${{ matrix.arch }}
-      run: |
+        tar xzf talloc-${{ env.TALLOC_VERSION }}.tar.gz
         cd talloc-${{ env.TALLOC_VERSION }}
         
+        # Set compiler and flags based on architecture
         case "${{ matrix.arch }}" in
           "x86_64")
             export CC="gcc"
+            export CFLAGS=""
             export HOST="x86_64-linux-gnu"
             CROSS_COMPILE=""
             ;;
           "i686")
             export CC="gcc"
-            export HOST="i686-linux-gnu"
             export CFLAGS="-m32"
             export LDFLAGS="-m32"
+            export HOST="i686-linux-gnu"
             CROSS_COMPILE="--cross-compile"
             ;;
           "aarch64")
             export CC="aarch64-linux-gnu-gcc"
+            export CFLAGS=""
             export HOST="aarch64-linux-gnu"
             CROSS_COMPILE="--cross-compile"
             ;;
           "armv7l")
             export CC="arm-linux-gnueabihf-gcc"
+            export CFLAGS=""
             export HOST="arm-linux-gnueabihf"
             CROSS_COMPILE="--cross-compile"
             ;;
         esac
         
-        echo "Building for ${{ matrix.arch }}"
-        echo "CC: $CC"
-        echo "HOST: $HOST"
+        echo "Building for ${{ matrix.arch }} with CC=$CC"
         
-        # Clean previous build
-        make distclean 2>/dev/null || true
-        rm -rf bin/ build/ 2>/dev/null || true
-        
-        # For cross-compilation, use the cross-answers file and skip execution tests
+        # Configure with cross-compilation if needed
         if [ "${{ matrix.arch }}" = "x86_64" ]; then
-          # Native build
-          ./configure \
-            --disable-python \
-            --prefix=$PWD/install/${{ matrix.arch }}
+          ./configure --prefix=$PWD/install --disable-python
         else
-          # Cross-compilation with extensive answers to skip execution tests
-          ./configure \
-            --host=$HOST \
-            --disable-python \
-            --prefix=$PWD/install/${{ matrix.arch }} \
-            --cross-compile \
-            --cross-answers=../android.txt \
-            --disable-rpath \
-            --bundled-libraries=ALL
+          ./configure --host=$HOST --prefix=$PWD/install --disable-python $CROSS_COMPILE
         fi
         
-        # Build and install
-        make -j$(nproc)
+        make
         make install
         
-        # Verify build
-        echo "Build verification for ${{ matrix.arch }}:"
-        find install/${{ matrix.arch }} -name "*.a" -o -name "*.so" | xargs file 2>/dev/null || \
-        ls -la install/${{ matrix.arch }}/lib/ 2>/dev/null || echo "No library files found"
+        # Set environment variables for this step
+        echo "TALLOC_INCLUDE_${{ matrix.arch }}=$PWD/install/include" >> $GITHUB_ENV
+        echo "TALLOC_LIB_${{ matrix.arch }}=$PWD/install/lib" >> $GITHUB_ENV
     
-    - name: Package artifacts
+    - name: Package and upload ${{ matrix.arch }} artifacts
       run: |
         cd talloc-${{ env.TALLOC_VERSION }}
-        tar -czf ../talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz -C install/${{ matrix.arch }} .
+        tar -czf ../talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz -C install .
     
-    - name: Upload artifacts
+    - name: Upload ${{ matrix.arch }} artifacts
       uses: actions/upload-artifact@v4
       with:
         name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}
