@@ -25,6 +25,11 @@ jobs:
     - name: Setup Android NDK
       uses: android-actions/setup-android@v3
     
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make python3
+    
     - name: Download and extract talloc
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-${{ env.TALLOC_VERSION }}.tar.gz
@@ -36,7 +41,7 @@ jobs:
         echo "PREBUILT_DIR=$PREBUILT_DIR" >> $GITHUB_ENV
         echo "TOOLCHAIN=$PREBUILT_DIR" >> $GITHUB_ENV
     
-    - name: Build talloc using waf
+    - name: Build talloc for Android
       run: |
         cd talloc-${{ env.TALLOC_VERSION }}
         
@@ -60,22 +65,23 @@ jobs:
             ;;
         esac
         
-        export CC="$TOOLCHAIN/bin/$clang_name"
-        export AR="$TOOLCHAIN/bin/llvm-ar"
-        export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
-        export STRIP="$TOOLCHAIN/bin/llvm-strip"
+        export ANDROID_CC="$TOOLCHAIN/bin/$clang_name"
+        export ANDROID_AR="$TOOLCHAIN/bin/llvm-ar"
+        export ANDROID_RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
+        export ANDROID_STRIP="$TOOLCHAIN/bin/llvm-strip"
         
-        echo "Using compiler: $CC"
+        echo "Using Android compiler: $ANDROID_CC"
         
-        # First build for host to generate necessary files
-        echo "Building for host first..."
-        ./configure --disable-python --prefix=$PWD/host_build
-        make -j$(nproc)
-        make install
-        make distclean
+
+        # Clean any previous builds
+        make distclean 2>/dev/null || true
+        rm -rf bin/ build/ 2>/dev/null || true
         
-        # Now build for Android
+        # Build for Android directly
         echo "Building for Android..."
+        CC="$ANDROID_CC" \
+        AR="$ANDROID_AR" \
+        RANLIB="$ANDROID_RANLIB" \
         ./configure \
           --cross-compile \
           --cross-answers=android.txt \
@@ -83,7 +89,7 @@ jobs:
           --prefix=$PWD/install/${{ matrix.arch }} \
           --disable-python \
           --bundled-libraries=ALL \
-          --check-c-compiler="$CC"
+          --check-c-compiler="$ANDROID_CC"
         
         make -j$(nproc)
         make install
