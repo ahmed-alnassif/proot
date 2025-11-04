@@ -21,18 +21,12 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Install cross-compilers (no conflicts)
+    - name: Install cross-compilers
       run: |
         sudo apt-get update
+        sudo apt-get install -y wget build-essential python3 file
         
-        # Install basic build tools first
-        sudo apt-get install -y \
-          build-essential \
-          wget \
-          file \
-          python3
-        
-        # Install cross-compilers individually to avoid conflicts
+        # Install cross-compilers individually
         case "${{ matrix.arch }}" in
           "x86_64")
             sudo apt-get install -y gcc g++
@@ -60,49 +54,64 @@ jobs:
         case "${{ matrix.arch }}" in
           "x86_64")
             export CC="gcc"
-            export CXX="g++"
             export HOST="x86_64-linux-gnu"
-            export BUILD="x86_64-linux-gnu"
+            CROSS_COMPILE=""
+            ANDROID_ARCH="x86_64"
             ;;
           "i686")
             export CC="i686-linux-gnu-gcc"
-            export CXX="i686-linux-gnu-g++"
             export HOST="i686-linux-gnu"
-            export BUILD="x86_64-linux-gnu"
+            CROSS_COMPILE="--cross-compile"
+            ANDROID_ARCH="x86"
             ;;
           "aarch64")
             export CC="aarch64-linux-gnu-gcc"
-            export CXX="aarch64-linux-gnu-g++"
             export HOST="aarch64-linux-gnu"
-            export BUILD="x86_64-linux-gnu"
+            CROSS_COMPILE="--cross-compile"
+            ANDROID_ARCH="arm64-v8a"
             ;;
           "armv7l")
             export CC="arm-linux-gnueabihf-gcc"
-            export CXX="arm-linux-gnueabihf-g++"
             export HOST="arm-linux-gnueabihf"
-            export BUILD="x86_64-linux-gnu"
+            CROSS_COMPILE="--cross-compile"
+            ANDROID_ARCH="armeabi-v7a"
             ;;
         esac
         
         echo "Building for ${{ matrix.arch }}"
         echo "CC: $CC"
         echo "HOST: $HOST"
+        echo "CROSS_COMPILE: $CROSS_COMPILE"
+        echo "ANDROID_ARCH: $ANDROID_ARCH"
         
-        # Clean and configure
+        # Clean previous build
         make distclean 2>/dev/null || true
+        rm -rf bin/ build/ 2>/dev/null || true
         
-        ./configure \
-          --host=$HOST \
-          --build=$BUILD \
-          --disable-python \
-          --prefix=$PWD/install/${{ matrix.arch }}
+        # Configure with your android.txt
+        if [ "${{ matrix.arch }}" = "x86_64" ]; then
+          # Native build doesn't need cross-compilation
+          ./configure \
+            --disable-python \
+            --prefix=$PWD/install/${{ matrix.arch }}
+        else
+          # Cross-compilation with your android.txt
+          ./configure \
+            --host=$HOST \
+            --disable-python \
+            --prefix=$PWD/install/${{ matrix.arch }} \
+            --cross-compile \
+            --cross-answers=../android.txt
+        fi
         
+        # Build and install
         make -j$(nproc)
         make install
         
-        # Verify architecture
-        echo "Build verification:"
-        file install/${{ matrix.arch }}/lib/libtalloc.* 2>/dev/null || ls -la install/${{ matrix.arch }}/lib/
+        # Verify build
+        echo "Build verification for ${{ matrix.arch }}:"
+        find install/${{ matrix.arch }} -name "*.a" -o -name "*.so" | xargs file 2>/dev/null || \
+        ls -la install/${{ matrix.arch }}/lib/ 2>/dev/null || echo "No library files found"
     
     - name: Package artifacts
       run: |
