@@ -17,20 +17,16 @@ jobs:
       matrix:
         include:
           - arch: aarch64
-            ndk_triplet: aarch64-linux-android
-            api_level: 21
+            host_triplet: aarch64-linux-gnu
             output: proot-arm64
           - arch: arm
-            ndk_triplet: armv7a-linux-androideabi
-            api_level: 21
+            host_triplet: arm-linux-gnueabi
             output: proot-arm
           - arch: i686
-            ndk_triplet: i686-linux-android
-            api_level: 21
+            host_triplet: i686-linux-gnu
             output: proot-x86
           - arch: x86_64
-            ndk_triplet: x86_64-linux-android
-            api_level: 21
+            host_triplet: x86_64-linux-gnu
             output: proot-x86-64
       fail-fast: false
 
@@ -53,13 +49,7 @@ jobs:
         echo "COMMIT_AUTHOR=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
         echo "COMMIT_DATE=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
-    - name: Setup Android NDK
-      uses: nttld/setup-ndk@v1
-      with:
-        ndk-version: r25b
-        add-to-path: true
-
-    - name: Install basic build tools
+    - name: Install cross-compilation tools
       run: |
         sudo apt-get update
         sudo apt-get install -y \
@@ -71,37 +61,60 @@ jobs:
           libtool \
           pkg-config \
           python3
+        
+        # Install architecture-specific cross compilers
+        case "${{ matrix.arch }}" in
+          aarch64)
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+            echo "STRIP=aarch64-linux-gnu-strip" >> $GITHUB_ENV
+            echo "OBJCOPY=aarch64-linux-gnu-objcopy" >> $GITHUB_ENV
+            echo "OBJDUMP=aarch64-linux-gnu-objdump" >> $GITHUB_ENV
+            ;;
+          arm)
+            sudo apt-get install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
+            echo "CC=arm-linux-gnueabi-gcc" >> $GITHUB_ENV
+            echo "STRIP=arm-linux-gnueabi-strip" >> $GITHUB_ENV
+            echo "OBJCOPY=arm-linux-gnueabi-objcopy" >> $GITHUB_ENV
+            echo "OBJDUMP=arm-linux-gnueabi-objdump" >> $GITHUB_ENV
+            ;;
+          i686)
+            sudo apt-get install -y gcc-multilib g++-multilib
+            echo "CC=gcc -m32" >> $GITHUB_ENV
+            echo "STRIP=strip" >> $GITHUB_ENV
+            echo "OBJCOPY=objcopy" >> $GITHUB_ENV
+            echo "OBJDUMP=objdump" >> $GITHUB_ENV
+            ;;
+          x86_64)
+            echo "CC=gcc" >> $GITHUB_ENV
+            echo "STRIP=strip" >> $GITHUB_ENV
+            echo "OBJCOPY=objcopy" >> $GITHUB_ENV
+            echo "OBJDUMP=objdump" >> $GITHUB_ENV
+            ;;
+        esac
 
-    - name: Build talloc with host GCC
+    - name: Build talloc for target architecture
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.3.tar.gz
         cd talloc-2.4.3
-        ./configure --prefix=$PWD/install --disable-python
+        
+        # Build talloc for the target architecture
+        if [ "${{ matrix.arch }}" = "i686" ]; then
+          ./configure --prefix=$PWD/install --disable-python CFLAGS="-m32" LDFLAGS="-m32"
+        elif [ "${{ matrix.arch }}" = "x86_64" ]; then
+          ./configure --prefix=$PWD/install --disable-python
+        else
+          ./configure --host=${{ matrix.host_triplet }} --prefix=$PWD/install --disable-python
+        fi
+        
         make
         make install
         echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
         echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
 
-    - name: Set up NDK environment
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
-        OBJCOPY="$NDK_TOOLCHAIN/bin/llvm-objcopy"
-        OBJDUMP="$NDK_TOOLCHAIN/bin/llvm-objdump"
-        
-        echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
-        echo "OBJCOPY=$OBJCOPY" >> $GITHUB_ENV
-        echo "OBJDUMP=$OBJDUMP" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
-        echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
-
     - name: Add bzero compatibility library
       run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         mkdir -p bzero-compat
         cd bzero-compat
         
@@ -113,12 +126,15 @@ jobs:
         }
         EOF
         
-        # Compile it with NDK
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
-        $CC $CFLAGS -c bzero.c -o bzero.o
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        # Compile it with target compiler
+        if [ "${{ matrix.arch }}" = "i686" ]; then
+          $CC -m32 -fPIC -c bzero.c -o bzero.o
+        else
+          $CC -fPIC -c bzero.c -o bzero.o
+        fi
         
+        # Create static library
+        ar rcs libbzero.a bzero.o
         echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
 
     - name: Patch all missing includes in PRoot
@@ -151,22 +167,40 @@ jobs:
             sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
             echo "✅ Patched pipe2 for Android compatibility"
 
-    - name: Build PRoot with NDK tools
+    - name: Build PRoot with target compiler
       run: |
             cd proot-src/src
-            # Use the host-built talloc but compile PRoot with NDK
-            # This works because talloc is a dependency for build tools, not the final binary
             cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
             cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
+            
+            # Set CROSS_COMPILE for non-x86_64 architectures
+            if [ "${{ matrix.arch }}" = "aarch64" ]; then
+              CROSS_COMPILE="aarch64-linux-gnu-"
+            elif [ "${{ matrix.arch }}" = "arm" ]; then
+              CROSS_COMPILE="arm-linux-gnueabi-"
+            else
+              CROSS_COMPILE=""
+            fi
+            
+            # Build flags for different architectures
+            if [ "${{ matrix.arch }}" = "i686" ]; then
+              CFLAGS="-m32"
+              LDFLAGS="-m32"
+            else
+              CFLAGS=""
+              LDFLAGS=""
+            fi
+            
             make -f GNUmakefile \
                   CROSS_COMPILE="$CROSS_COMPILE" \
                   CC="$CC" \
                   STRIP="$STRIP" \
                   OBJDUMP="$OBJDUMP" \
                   OBJCOPY="$OBJCOPY" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
+                  CPPFLAGS="-I$TALLOC_INCLUDE -I." \
+                  CFLAGS="$CFLAGS" \
+                  LDFLAGS="$LDFLAGS -L. -ltalloc -lbzero" \
                   V=1
             if [ -f proot ]; then
                   echo "✅ Build successful!"
@@ -247,7 +281,7 @@ jobs:
         body: |
           # PRoot Binaries Build
           
-          **Built with Android NDK for full Android compatibility**
+          **Built with GCC cross-compilers for maximum compatibility**
           
           **Source Repository:** [termux/proot](https://github.com/termux/proot)
           
@@ -262,10 +296,6 @@ jobs:
           
           **Built with all extensions enabled (ashmem, sysvipc, etc.)**
           
-          **Target API Level:** 21 (Android 5.0+)
-          
-          **Statically linked with talloc**
-          
           **Built Architectures:**
           ${{ env.COUNT }} out of 4 architectures built successfully
           
@@ -274,7 +304,7 @@ jobs:
           ${{ steps.checksums.outputs.CHECKSUMS_CONTENT }}
           ```
           
-          *Automatically built from latest source commit using Android NDK*
+          *Automatically built from latest source commit using GCC cross-compilers*
         files: |
           artifacts/proot-*
           artifacts/checksums.txt
