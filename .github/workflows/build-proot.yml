@@ -117,51 +117,51 @@ jobs:
 
     - name: Patch all missing includes in PRoot
       run: |
-            cd proot-src/src
-            
-            # Add missing standard headers to all C files
-            for file in $(find . -name "*.c" -type f); do
-                  # Check what functions are used and add appropriate headers
-                  if grep -q "strcmp\|strcpy\|strlen\|strdup\|memset\|memcpy" "$file" && ! grep -q "#include <string.h>" "$file"; then
-                        echo "Adding string.h to $file"
-                        sed -i '1i #include <string.h>' "$file"
-                  fi
-                  
-                  if grep -q "malloc\|free\|calloc\|realloc" "$file" && ! grep -q "#include <stdlib.h>" "$file"; then
-                        echo "Adding stdlib.h to $file"
-                        sed -i '1i #include <stdlib.h>' "$file"
-                  fi
-                  
-                  if grep -q "printf\|fprintf\|sprintf" "$file" && ! grep -q "#include <stdio.h>" "$file"; then
-                        echo "Adding stdio.h to $file"
-                        sed -i '1i #include <stdio.h>' "$file"
-                  fi
-            done
-            
-            echo "✅ Patched all missing includes"
+        cd proot-src/src
+        
+        # Add all necessary standard headers to each C file
+        for file in $(find . -name "*.c" -type f); do
+          echo "Patching $file"
+          
+          # Create a temporary file with the headers
+          cat > temp_header.c << 'EOF'
+          #include <string.h>
+          #include <stdlib.h>
+          #include <stdio.h>
+          #include <strings.h>
+          EOF
+          
+          # Append the original file content
+          cat "$file" >> temp_header.c
+          
+          # Replace the original file
+          mv temp_header.c "$file"
+        done
+        
+        echo "✅ Added all standard headers to all C files"
 
     - name: Build PRoot with NDK and compatibility libs
       run: |
-            cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
-            cp $BZERO_COMPAT/libbzero.a ./
-            make -f GNUmakefile clean || true
-            make -f GNUmakefile \
-                  CROSS_COMPILE="$CROSS_COMPILE" \
-                  CC="$CC" \
-                  STRIP="$STRIP" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
-                  V=1
-            if [ -f proot ]; then
-                  echo "✅ Build successful!"
-                  file proot
-                  ls -la proot
-                  chmod +x proot
-            else
-                  echo "❌ Binary not created!"
-                  exit 1
-            fi
+        cd proot-src/src
+        cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
+        cp $BZERO_COMPAT/libbzero.a ./
+        make -f GNUmakefile clean || true
+        make -f GNUmakefile \
+          CROSS_COMPILE="$CROSS_COMPILE" \
+          CC="$CC" \
+          STRIP="$STRIP" \
+          CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
+          LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
+          V=1
+        if [ -f proot ]; then
+          echo "✅ Build successful!"
+          file proot
+          ls -la proot
+          chmod +x proot
+        else
+          echo "❌ Binary not created!"
+          exit 1
+        fi
 
     - name: Prepare binary for release
       run: |
