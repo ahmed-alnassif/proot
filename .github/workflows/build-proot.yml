@@ -16,6 +16,7 @@ jobs:
     strategy:
       matrix:
         arch: [x86_64, i686, aarch64, armv7l]
+      fail-fast: false
     
     steps:
     - name: Checkout code
