@@ -1,4 +1,4 @@
-name: Debug TALLOC Build
+name: Build TALLOC with NDK
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 jobs:
-  debug-talloc:
+  build-talloc:
     runs-on: ubuntu-latest
     
     steps:
@@ -16,20 +16,14 @@ jobs:
         ndk-version: r25b
         add-to-path: true
 
-    - name: Install cross-compilers
+    - name: Install basic build tools
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
-          file \
           wget \
-          git \
-          automake \
-          libtool \
-          pkg-config \
-          python3 \
-          gcc-aarch64-linux-gnu \
-          g++-aarch64-linux-gnu
+          tar \
+          python3
 
     - name: Download and extract talloc
       run: |
@@ -37,98 +31,60 @@ jobs:
         tar xzf talloc-2.4.3.tar.gz
         echo "TALLOC_DIR=$PWD/talloc-2.4.3" >> $GITHUB_ENV
 
-    - name: Attempt 1 - Build with NDK compiler
+    - name: Build talloc for aarch64 with NDK
       run: |
         cd $TALLOC_DIR
-        #mkdir -p build-ndk
-        #cd build-ndk
         
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android21-clang"
         SYSROOT="$NDK_TOOLCHAIN/sysroot"
+        AR="$NDK_TOOLCHAIN/bin/llvm-ar"
+        RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
         
-        echo "=== Attempt 1: NDK Compiler ==="
+        echo "=== Building talloc for aarch64 with NDK ==="
         echo "CC: $CC"
+        echo "AR: $AR"
         
-        ./configure --prefix=$PWD/install --disable-python \
-          CC="$CC" \
-          CFLAGS="--sysroot=$SYSROOT" \
-          LDFLAGS="--sysroot=$SYSROOT"
+        # Use waf build system with NDK toolchain
+        CC="$CC" \
+        AR="$AR" \
+        RANLIB="$RANLIB" \
+        CFLAGS="--sysroot=$SYSROOT -fPIC" \
+        LDFLAGS="--sysroot=$SYSROOT" \
+        ./buildtools/bin/waf configure --prefix=$PWD/install-ndk --disable-python --cross-compile
         
-        make || echo "❌ NDK build failed"
-        make install || echo "❌ NDK install failed"
+        ./buildtools/bin/waf build
+        ./buildtools/bin/waf install
 
-    - name: Attempt 2 - Build with aarch64-linux-gnu compiler
+    - name: Verify the build
       run: |
         cd $TALLOC_DIR
-        #mkdir -p build-aarch64-gcc
-        #cd build-aarch64-gcc
+        echo "=== Build Verification ==="
         
-        echo "=== Attempt 2: aarch64-linux-gnu-gcc ==="
-        
-        ./configure --prefix=$PWD/install --disable-python \
-          --host=aarch64-linux-gnu \
-          CC="aarch64-linux-gnu-gcc"
-        
-        make || echo "❌ aarch64-gcc build failed"
-        make install || echo "❌ aarch64-gcc install failed"
-
-    - name: Attempt 3 - Build with host compiler for aarch64 target
-      run: |
-        cd $TALLOC_DIR
-        #mkdir -p build-host-aarch64
-        #cd build-host-aarch64
-        
-        echo "=== Attempt 3: Host GCC for aarch64 ==="
-        
-        ./configure --prefix=$PWD/install --disable-python \
-          --host=aarch64-linux-gnu \
-          CC="gcc"
-        
-        make || echo "❌ Host GCC aarch64 build failed"
-        make install || echo "❌ Host GCC aarch64 install failed"
-
-    - name: Check results
-      run: |
-        echo "=== Build Results for aarch64 ==="
-        
-        echo "Attempt 1 (NDK):"
-        if [ -d "$TALLOC_DIR/build-ndk/install" ]; then
-          echo "✅ Success"
-          find "$TALLOC_DIR/build-ndk/install" -name "*.a" -o -name "*.so" | while read file; do
-            echo "  - $(basename $file)"
-            file "$file" || true
+        if [ -d "install-ndk" ]; then
+          echo "✅ Build successful!"
+          echo "Install directory contents:"
+          find install-ndk -type f -name "*.a" -o -name "*.h" | while read file; do
+            echo "  - $file"
+            if file "$file" 2>/dev/null | grep -q "ELF\|ar archive"; then
+              echo "    ✅ Valid binary"
+            fi
           done
+          
+          # Check if library is ARM64
+          if [ -f "install-ndk/lib/libtalloc.a" ]; then
+            echo "Library architecture:"
+            file install-ndk/lib/libtalloc.a || true
+          fi
         else
-          echo "❌ Failed"
-        fi
-        
-        echo "Attempt 2 (aarch64-linux-gnu-gcc):"
-        if [ -d "$TALLOC_DIR/build-aarch64-gcc/install" ]; then
-          echo "✅ Success"
-          find "$TALLOC_DIR/build-aarch64-gcc/install" -name "*.a" -o -name "*.so" | while read file; do
-            echo "  - $(basename $file)"
-            file "$file" || true
-          done
-        else
-          echo "❌ Failed"
-        fi
-        
-        echo "Attempt 3 (Host GCC aarch64):"
-        if [ -d "$TALLOC_DIR/build-host-aarch64/install" ]; then
-          echo "✅ Success"
-          find "$TALLOC_DIR/build-host-aarch64/install" -name "*.a" -o -name "*.so" | while read file; do
-            echo "  - $(basename $file)"
-            file "$file" || true
-          done
-        else
-          echo "❌ Failed"
+          echo "❌ Build failed - no install directory"
+          exit 1
         fi
 
-    - name: Upload build artifacts
+    - name: Upload talloc artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: talloc-aarch64-debug
+        name: talloc-aarch64-ndk
         path: |
-          $TALLOC_DIR/build-*/install
+          $TALLOC_DIR/install-ndk/
         retention-days: 1
