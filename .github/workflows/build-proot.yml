@@ -180,7 +180,7 @@ jobs:
     - name: Build PRoot with NDK tools (FIXED OBJCOPY/OBJDUMP)
       run: |
             cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
+            cp $TALLOC_LIB/libtalloc.so.2 ./libtalloc.a
             cp $BZERO_COMPAT/libbzero.a ./
             make -f GNUmakefile clean || true
             make -f GNUmakefile \
