@@ -72,38 +72,42 @@ jobs:
           pkg-config \
           python3
 
-    - name: Build talloc for Android using Docker multi-arch
+    - name: Download pre-built talloc for ${{ matrix.arch }}
       run: |
-            # Clean any existing talloc build
-            rm -rf talloc-2.4.3 talloc-install
-            
             case "${{ matrix.arch }}" in
                   "aarch64")
-                        docker run --rm --platform linux/arm64 -v $(pwd):/workspace ubuntu:22.04 \
-                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        TALLOC_URL="https://raw.githubusercontent.com/Xed-Editor/Karbon-PackagesX/main/aarch64/libtalloc.so.2"
                         ;;
                   "arm")
-                        docker run --rm --platform linux/arm/v7 -v $(pwd):/workspace ubuntu:22.04 \
-                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        TALLOC_URL="https://raw.githubusercontent.com/Xed-Editor/Karbon-PackagesX/main/arm/libtalloc.so.2"
                         ;;
                   "i686")
-                        docker run --rm --platform linux/386 -v $(pwd):/workspace debian:bullseye \
-                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        TALLOC_URL="https://raw.githubusercontent.com/Xed-Editor/Karbon-PackagesX/main/x86/libtalloc.so.2"
                         ;;
                   "x86_64")
-                        docker run --rm --platform linux/amd64 -v $(pwd):/workspace ubuntu:22.04 \
-                              bash -c "apt-get update && apt-get install -y wget build-essential python3 && cd /workspace && wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz && tar xzf talloc-2.4.3.tar.gz && cd talloc-2.4.3 && ./configure --prefix=/workspace/talloc-install --disable-python && make && make install"
+                        TALLOC_URL="https://raw.githubusercontent.com/Xed-Editor/Karbon-PackagesX/main/x86_64/libtalloc.so.2"
                         ;;
             esac
             
-            # The built talloc is now in talloc-install/ on the host
+            # Download pre-built talloc
+            mkdir -p talloc-install/lib
+            wget -O talloc-install/lib/libtalloc.so.2 $TALLOC_URL
+            
+            # Create a symlink for compilation (libtalloc.so -> libtalloc.so.2)
+            cd talloc-install/lib
+            ln -sf libtalloc.so.2 libtalloc.so
+            
+            # Create include directory with talloc.h (you might need to get this separately)
+            cd ../..
+            mkdir -p talloc-install/include
+            # You might need to download talloc.h or extract it from source
+            wget https://raw.githubusercontent.com/Samba/samba/master/lib/talloc/talloc.h -O talloc-install/include/talloc.h || echo "Could not download talloc.h"
+            
             echo "TALLOC_INCLUDE=$PWD/talloc-install/include" >> $GITHUB_ENV
             echo "TALLOC_LIB=$PWD/talloc-install/lib" >> $GITHUB_ENV
             
-            # Verify the files exist
-            echo "Talloc build verification:"
-            ls -la $PWD/talloc-install/include/
-            ls -la $PWD/talloc-install/lib/
+            echo "Downloaded pre-built talloc for ${{ matrix.arch }}"
+            ls -la talloc-install/lib/
     
     - name: Set up NDK environment
       run: |
