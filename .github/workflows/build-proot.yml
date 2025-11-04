@@ -70,23 +70,6 @@ jobs:
         tar xzf talloc-2.4.3.tar.gz
         echo "TALLOC_DIR=$PWD/talloc-2.4.3" >> $GITHUB_ENV
 
-    - name: Attempt 1 - Build talloc with NDK compiler directly
-      run: |
-        cd $TALLOC_DIR
-        mkdir -p build-attempt1
-        cd build-attempt1
-        
-        echo "=== Attempt 1: Direct NDK compiler ==="
-        echo "CC: $CC"
-        echo "SYSROOT: $SYSROOT"
-        
-        ../configure --prefix=$PWD/install --disable-python \
-          CC="$CC" \
-          CFLAGS="--sysroot=$SYSROOT" \
-          LDFLAGS="--sysroot=$SYSROOT"
-        
-        make || echo "❌ Attempt 1 failed"
-        make install || echo "❌ Attempt 1 install failed"
 
     - name: Attempt 2 - Build talloc with host compiler for target
       run: |
