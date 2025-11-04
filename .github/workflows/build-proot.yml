@@ -9,17 +9,14 @@ on:
         default: 'aarch64'
         type: choice
         options:
-        - aarch64
-        - arm
-        - i686
-        - x86_64
+          - aarch64
+          - arm
+          - i686
+          - x86_64
 
 jobs:
   debug-talloc:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [${{ github.event.inputs.architecture }}]
     
     steps:
     - name: Setup Android NDK
@@ -44,7 +41,7 @@ jobs:
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
         
-        case "${{ matrix.arch }}" in
+        case "${{ github.event.inputs.architecture }}" in
           aarch64)
             TRIPLET="aarch64-linux-android"
             ;;
@@ -99,7 +96,7 @@ jobs:
         
         echo "=== Attempt 2: Host compiler with --host ==="
         
-        case "${{ matrix.arch }}" in
+        case "${{ github.event.inputs.architecture }}" in
           aarch64)
             HOST="aarch64-linux-android"
             ;;
@@ -179,7 +176,7 @@ jobs:
     - name: Upload build logs
       uses: actions/upload-artifact@v4
       with:
-        name: talloc-debug-${{ matrix.arch }}
+        name: talloc-debug-${{ github.event.inputs.architecture }}
         path: |
           $TALLOC_DIR/build-*/config.log
           $TALLOC_DIR/build-*/Makefile
