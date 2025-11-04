@@ -73,41 +73,41 @@ jobs:
           python3
 
     - name: Build talloc for Android (waf + qemu)
-  run: |
-    sudo apt-get update
-    sudo apt-get install -y python3 qemu-user-static
+      run: |
+            sudo apt-get update
+            sudo apt-get install -y python3 qemu-user-static
 
-    wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-    tar xzf talloc-2.4.3.tar.gz
-    cd talloc-2.4.3
+            wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+            tar xzf talloc-2.4.3.tar.gz
+            cd talloc-2.4.3
 
-    NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-    export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-    export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-    export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
-    export HOSTCC="/usr/bin/gcc"
+            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+            export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+            export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
+            export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
+            export HOSTCC="/usr/bin/gcc"
 
-    # choose qemu binary by arch:
-    case "${{ matrix.arch }}" in
-      aarch64) QEMU_BIN="/usr/bin/qemu-aarch64-static" ;;
-      arm)     QEMU_BIN="/usr/bin/qemu-arm-static" ;;
-      i686)    QEMU_BIN="/usr/bin/qemu-i386-static" ;;
-      x86_64)  QEMU_BIN="/usr/bin/qemu-x86_64-static" ;;
-    esac
+            # choose qemu binary by arch:
+            case "${{ matrix.arch }}" in
+                  aarch64) QEMU_BIN="/usr/bin/qemu-aarch64-static" ;;
+                  arm)             QEMU_BIN="/usr/bin/qemu-arm-static" ;;
+                  i686)            QEMU_BIN="/usr/bin/qemu-i386-static" ;;
+                  x86_64)      QEMU_BIN="/usr/bin/qemu-x86_64-static" ;;
+            esac
 
-    ./waf configure \
-      --cross-compile \
-      --cc="$CC" \
-      --hostcc="$HOSTCC" \
-      --cross-execute="$QEMU_BIN" \
-      --disable-python \
-      --prefix="$PWD/_install"
+            ./waf configure \
+                  --cross-compile \
+                  --cc="$CC" \
+                  --hostcc="$HOSTCC" \
+                  --cross-execute="$QEMU_BIN" \
+                  --disable-python \
+                  --prefix="$PWD/_install"
 
-    ./waf build -j$(nproc)
-    ./waf install
+            ./waf build -j$(nproc)
+            ./waf install
 
-    echo "TALLOC_INCLUDE=$PWD/_install/include" >> $GITHUB_ENV
-    echo "TALLOC_LIB=$PWD/_install/lib" >> $GITHUB_ENV
+            echo "TALLOC_INCLUDE=$PWD/_install/include" >> $GITHUB_ENV
+            echo "TALLOC_LIB=$PWD/_install/lib" >> $GITHUB_ENV
 
     - name: Set up NDK environment
       run: |
