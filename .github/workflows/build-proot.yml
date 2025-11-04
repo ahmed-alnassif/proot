@@ -145,17 +145,12 @@ jobs:
             sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
             echo "✅ Patched pipe2 for Android compatibility"
 
-    - name: Install missing NDK tools
+    - name: Install host binutils
       run: |
-            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-            
-            # Create symlinks for the missing tools
-            sudo ln -sf $NDK_TOOLCHAIN/bin/llvm-objdump $NDK_TOOLCHAIN/bin/aarch64-linux-android-objdump
-            sudo ln -sf $NDK_TOOLCHAIN/bin/llvm-objcopy $NDK_TOOLCHAIN/bin/aarch64-linux-android-objcopy
-            
-            echo "✅ Created symlinks for missing tools"
+            sudo apt-get install -y binutils
+            echo "✅ Installed objdump and objcopy"
 
-    - name: Build PRoot with NDK and compatibility libs
+    - name: Build PRoot with NDK and host tools
       run: |
             cd proot-src/src
             cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
@@ -165,8 +160,8 @@ jobs:
                   CROSS_COMPILE="$CROSS_COMPILE" \
                   CC="$CC" \
                   STRIP="$STRIP" \
-                  OBJDUMP="$NDK_TOOLCHAIN/bin/llvm-objdump" \
-                  OBJCOPY="$NDK_TOOLCHAIN/bin/llvm-objcopy" \
+                  OBJDUMP="objdump" \
+                  OBJCOPY="objcopy" \
                   CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
                   LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
                   V=1
