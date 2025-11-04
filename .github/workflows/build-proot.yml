@@ -21,19 +21,32 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Setup QEMU for multi-arch
-      uses: docker/setup-qemu-action@v3
-    
-    - name: Install cross-compilers
+    - name: Install cross-compilers (no conflicts)
       run: |
         sudo apt-get update
+        
+        # Install basic build tools first
         sudo apt-get install -y \
           build-essential \
-          gcc-aarch64-linux-gnu \
-          gcc-arm-linux-gnueabihf \
-          gcc-i686-linux-gnu \
-          gcc-multilib \
-          wget
+          wget \
+          file \
+          python3
+        
+        # Install cross-compilers individually to avoid conflicts
+        case "${{ matrix.arch }}" in
+          "x86_64")
+            sudo apt-get install -y gcc g++
+            ;;
+          "i686")
+            sudo apt-get install -y gcc-i686-linux-gnu g++-i686-linux-gnu
+            ;;
+          "aarch64")
+            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            ;;
+          "armv7l")
+            sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+            ;;
+        esac
     
     - name: Download talloc
       run: |
@@ -47,28 +60,40 @@ jobs:
         case "${{ matrix.arch }}" in
           "x86_64")
             export CC="gcc"
+            export CXX="g++"
             export HOST="x86_64-linux-gnu"
-            export CFLAGS=""
+            export BUILD="x86_64-linux-gnu"
             ;;
           "i686")
             export CC="i686-linux-gnu-gcc"
+            export CXX="i686-linux-gnu-g++"
             export HOST="i686-linux-gnu"
-            export CFLAGS="-m32"
+            export BUILD="x86_64-linux-gnu"
             ;;
           "aarch64")
             export CC="aarch64-linux-gnu-gcc"
+            export CXX="aarch64-linux-gnu-g++"
             export HOST="aarch64-linux-gnu"
-            export CFLAGS=""
+            export BUILD="x86_64-linux-gnu"
             ;;
           "armv7l")
             export CC="arm-linux-gnueabihf-gcc"
+            export CXX="arm-linux-gnueabihf-g++"
             export HOST="arm-linux-gnueabihf"
-            export CFLAGS="-march=armv7-a -mfpu=neon"
+            export BUILD="x86_64-linux-gnu"
             ;;
         esac
         
+        echo "Building for ${{ matrix.arch }}"
+        echo "CC: $CC"
+        echo "HOST: $HOST"
+        
+        # Clean and configure
+        make distclean 2>/dev/null || true
+        
         ./configure \
           --host=$HOST \
+          --build=$BUILD \
           --disable-python \
           --prefix=$PWD/install/${{ matrix.arch }}
         
@@ -76,15 +101,16 @@ jobs:
         make install
         
         # Verify architecture
-        file install/${{ matrix.arch }}/lib/libtalloc.* | head -1
+        echo "Build verification:"
+        file install/${{ matrix.arch }}/lib/libtalloc.* 2>/dev/null || ls -la install/${{ matrix.arch }}/lib/
     
     - name: Package artifacts
       run: |
         cd talloc-${{ env.TALLOC_VERSION }}
-        tar -czf talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz -C install/${{ matrix.arch }} .
+        tar -czf ../talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz -C install/${{ matrix.arch }} .
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}
-        path: talloc-${{ env.TALLOC_VERSION }}/talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz
+        path: talloc-${{ env.TALLOC_VERSION }}-${{ matrix.arch }}-linux-gnu.tar.gz
