@@ -69,10 +69,9 @@ jobs:
           git \
           automake \
           libtool \
-          pkg-config \
-          python3
+          pkg-config
 
-    - name: Build talloc with host GCC
+    - name: Build talloc for host (needed for build tools)
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.3.tar.gz
@@ -86,94 +85,100 @@ jobs:
     - name: Set up NDK environment
       run: |
         NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
-        echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
+        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
+        STRIP="$NDK_TOOLCHAIN/bin/llvm-strip"
+        OBJCOPY="$NDK_TOOLCHAIN/bin/llvm-objcopy"
+        OBJDUMP="$NDK_TOOLCHAIN/bin/llvm-objdump"
+        
+        echo "CC=$CC" >> $GITHUB_ENV
+        echo "STRIP=$STRIP" >> $GITHUB_ENV
+        echo "OBJCOPY=$OBJCOPY" >> $GITHUB_ENV
+        echo "OBJDUMP=$OBJDUMP" >> $GITHUB_ENV
         echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
         echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
+        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
 
-    - name: Add bzero compatibility library
+    - name: Create static talloc library for Android
       run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        mkdir -p bzero-compat
-        cd bzero-compat
+        # We need to build talloc statically for Android
+        wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
+        tar xzf talloc-2.4.3.tar.gz
+        cd talloc-2.4.3
         
-        # Create bzero.c that implements bzero using memset
-        cat > bzero.c << 'EOF'
-        #include <string.h>
-        void bzero(void *s, size_t n) {
-        memset(s, 0, n);
-        }
-        EOF
+        # Configure for Android
+        ./configure \
+          --host=${{ matrix.ndk_triplet }} \
+          --enable-static \
+          --disable-shared \
+          --disable-python \
+          --prefix=$PWD/android-install \
+          CC="$CC" \
+          CFLAGS="--sysroot=$SYSROOT -fPIE"
         
-        # Compile it with NDK
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
-        $CC $CFLAGS -c bzero.c -o bzero.o
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        make
+        make install
+        echo "ANDROID_TALLOC_INCLUDE=$PWD/android-install/include" >> $GITHUB_ENV
+        echo "ANDROID_TALLOC_LIB=$PWD/android-install/lib" >> $GITHUB_ENV
+
+    - name: Patch PRoot source for Android compatibility
+      run: |
+        cd proot-src/src
         
-        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
-
-    - name: Patch all missing includes in PRoot
-      run: |
-            cd proot-src/src
-            
-            # Use a more reliable method to add headers
-            for file in $(find . -name "*.c" -type f); do
-                  echo "Patching $file"
-                  
-                  # Create a temporary file with headers
-                  {
-                        echo "#include <string.h>"
-                        echo "#include <stdlib.h>" 
-                        echo "#include <stdio.h>"
-                        echo "#include <strings.h>"
-                        echo "#include <unistd.h>"
-                        echo "#include <fcntl.h>"
-                        cat "$file"
-                  } > "${file}.tmp"
-                  
-                  mv "${file}.tmp" "$file"
-            done
-            
-            echo "✅ Added all standard headers to all C files"
-
-    - name: Patch pipe2 usage in PRoot
-      run: |
-            cd proot-src/src
-            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
-            echo "✅ Patched pipe2 for Android compatibility"
-
-    - name: Install host binutils
-      run: |
-            sudo apt-get install -y binutils
-            echo "✅ Installed objdump and objcopy"
-
-    - name: Build PRoot with NDK and host tools
-      run: |
-            cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
-            cp $BZERO_COMPAT/libbzero.a ./
-            make -f GNUmakefile clean || true
-            make -f GNUmakefile \
-                  CROSS_COMPILE="$CROSS_COMPILE" \
-                  CC="$CC" \
-                  STRIP="$STRIP" \
-                  OBJDUMP="objdump" \
-                  OBJCOPY="objcopy" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
-                  V=1
-            if [ -f proot ]; then
-                  echo "✅ Build successful!"
-                  file proot
-                  ls -la proot
-                  chmod +x proot
-            else
-                  echo "❌ Binary not created!"
-                  exit 1
+        # Patch pipe2 usage
+        sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/ashmem/ashmem.c
+        sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
+        
+        # Add missing includes to common files
+        for file in tracee/tracee.c tracee/mem.c tracee/seccomp.c cli/proot.c; do
+          if [ -f "$file" ]; then
+            # Add standard headers if not present
+            if ! grep -q "#include <string.h>" "$file"; then
+              sed -i '1i #include <string.h>' "$file"
             fi
+            if ! grep -q "#include <stdlib.h>" "$file"; then
+              sed -i '1i #include <stdlib.h>' "$file"
+            fi
+          fi
+        done
+        
+        echo "✅ Patched PRoot for Android compatibility"
+
+    - name: Build PRoot with NDK
+      run: |
+        cd proot-src/src
+        
+        # Clean previous builds
+        make -f GNUmakefile clean || true
+        
+        # Build with Android NDK
+        make -f GNUmakefile \
+          CROSS_COMPILE="$CROSS_COMPILE" \
+          CC="$CC" \
+          STRIP="$STRIP" \
+          OBJCOPY="$OBJCOPY" \
+          OBJDUMP="$OBJDUMP" \
+          CPPFLAGS="-I$ANDROID_TALLOC_INCLUDE -I$SYSROOT/usr/include -D_FILE_OFFSET_BITS=64" \
+          CFLAGS="--sysroot=$SYSROOT -fPIE -pie" \
+          LDFLAGS="-L$ANDROID_TALLOC_LIB -static-libgcc -fPIE -pie" \
+          LIBS="-ltalloc -lc" \
+          V=1
+        
+        if [ -f proot ]; then
+          echo "✅ Build successful!"
+          file proot
+          ls -la proot
+          # Test if binary is actually ARM/Android
+          if file proot | grep -q "ELF.*ARM\|ELF.*Android\|ELF.*aarch64"; then
+            echo "✅ Binary is confirmed Android/ARM architecture"
+          else
+            echo "⚠️  Binary architecture doesn't look like Android"
+          fi
+          chmod +x proot
+        else
+          echo "❌ Binary not created!"
+          ls -la
+          exit 1
+        fi
 
     - name: Prepare binary for release
       run: |
@@ -208,6 +213,7 @@ jobs:
         find artifacts -type f -name "proot-*" | while read file; do
           echo " - $file"
           file "$file" || true
+          echo "   Size: $(stat -c%s "$file") bytes"
         done
         COUNT=$(find artifacts -type f -name "proot-*" | wc -l)
         echo "Successful builds: $COUNT"
