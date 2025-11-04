@@ -58,7 +58,7 @@ jobs:
             ;;
           "i686")
             export CC="gcc"
-            export CFLAGS="-m32"
+            export CFLAGS="-m32 -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE"
             export LDFLAGS="-m32"
             export HOST="i686-linux-gnu"
             CONFIGURE_FLAGS="--host=$HOST --cross-compile --cross-answers=../android.txt"
@@ -78,6 +78,7 @@ jobs:
         esac
         
         echo "Building for ${{ matrix.arch }} with CC=$CC"
+        echo "CFLAGS: $CFLAGS"
         echo "Configure flags: $CONFIGURE_FLAGS"
         
         # Configure and build
