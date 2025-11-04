@@ -1,58 +1,27 @@
-name: Build and Release PRoot
+name: Debug TALLOC Build
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
   workflow_dispatch:
-  push:
-    branches: [ main ]
-
-permissions:
-  contents: write
+    inputs:
+      architecture:
+        description: 'Target architecture'
+        required: true
+        default: 'aarch64'
+        type: choice
+        options:
+        - aarch64
+        - arm
+        - i686
+        - x86_64
 
 jobs:
-  build-proot:
+  debug-talloc:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - arch: aarch64
-            ndk_triplet: aarch64-linux-android
-            api_level: 21
-            output: proot-arm64
-          - arch: arm
-            ndk_triplet: armv7a-linux-androideabi
-            api_level: 21
-            output: proot-arm
-          - arch: i686
-            ndk_triplet: i686-linux-android
-            api_level: 21
-            output: proot-x86
-          - arch: x86_64
-            ndk_triplet: x86_64-linux-android
-            api_level: 21
-            output: proot-x86-64
-      fail-fast: false
-
+        arch: [${{ github.event.inputs.architecture }}]
+    
     steps:
-    - name: Checkout PRoot source
-      uses: actions/checkout@v4
-      with:
-        repository: termux/proot
-        path: proot-src
-
-    - name: Get commit details
-      id: commit-info
-      run: |
-        cd proot-src
-        echo "COMMIT_HASH=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "COMMIT_SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B | head -n 10 >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "COMMIT_AUTHOR=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "COMMIT_DATE=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
     - name: Setup Android NDK
       uses: nttld/setup-ndk@v1
       with:
@@ -69,246 +38,149 @@ jobs:
           git \
           automake \
           libtool \
-          pkg-config \
-          python3
+          pkg-config
 
-    - name: Install cross-compilation tools for talloc
+    - name: Set NDK environment variables
       run: |
-        # Install architecture-specific cross compilers for talloc only
+        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+        
         case "${{ matrix.arch }}" in
           aarch64)
-            sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            TRIPLET="aarch64-linux-android"
             ;;
           arm)
-            sudo apt-get install -y gcc-arm-linux-gnueabi g++-arm-linux-gnueabi
+            TRIPLET="armv7a-linux-androideabi"
             ;;
           i686)
-            sudo apt-get install -y gcc-multilib g++-multilib
+            TRIPLET="i686-linux-android"
             ;;
           x86_64)
-            # Native compiler already available
+            TRIPLET="x86_64-linux-android"
             ;;
         esac
+        
+        CC="$NDK_TOOLCHAIN/bin/${TRIPLET}21-clang"
+        SYSROOT="$NDK_TOOLCHAIN/sysroot"
+        
+        echo "CC=$CC" >> $GITHUB_ENV
+        echo "SYSROOT=$SYSROOT" >> $GITHUB_ENV
+        echo "TRIPLET=$TRIPLET" >> $GITHUB_ENV
+        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
 
-    - name: Build talloc with target architecture compiler
+    - name: Download and extract talloc
       run: |
         wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
         tar xzf talloc-2.4.3.tar.gz
-        cd talloc-2.4.3
-        
-        # Set compiler based on architecture for talloc only
-        if [ "${{ matrix.arch }}" = "aarch64" ]; then
-          TALLOC_CC="aarch64-linux-gnu-gcc"
-        elif [ "${{ matrix.arch }}" = "arm" ]; then
-          TALLOC_CC="arm-linux-gnueabi-gcc"
-        elif [ "${{ matrix.arch }}" = "i686" ]; then
-          TALLOC_CC="gcc -m32"
-        else
-          TALLOC_CC="gcc"
-        fi
-        
-        ./configure --prefix=$PWD/install --disable-python CC="$TALLOC_CC"
-        make
-        make install
-        echo "TALLOC_INCLUDE=$PWD/install/include" >> $GITHUB_ENV
-        echo "TALLOC_LIB=$PWD/install/lib" >> $GITHUB_ENV
+        echo "TALLOC_DIR=$PWD/talloc-2.4.3" >> $GITHUB_ENV
 
-    - name: Set up NDK environment
+    - name: Attempt 1 - Build talloc with NDK compiler directly
       run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
-        OBJCOPY="$NDK_TOOLCHAIN/bin/llvm-objcopy"
-        OBJDUMP="$NDK_TOOLCHAIN/bin/llvm-objdump"
+        cd $TALLOC_DIR
+        mkdir -p build-attempt1
+        cd build-attempt1
         
-        echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
-        echo "OBJCOPY=$OBJCOPY" >> $GITHUB_ENV
-        echo "OBJDUMP=$OBJDUMP" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
-        echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
+        echo "=== Attempt 1: Direct NDK compiler ==="
+        echo "CC: $CC"
+        echo "SYSROOT: $SYSROOT"
+        
+        ../configure --prefix=$PWD/install --disable-python \
+          CC="$CC" \
+          CFLAGS="--sysroot=$SYSROOT" \
+          LDFLAGS="--sysroot=$SYSROOT"
+        
+        make || echo "❌ Attempt 1 failed"
+        make install || echo "❌ Attempt 1 install failed"
 
-    - name: Add bzero compatibility library
+    - name: Attempt 2 - Build talloc with host compiler for target
       run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        mkdir -p bzero-compat
-        cd bzero-compat
+        cd $TALLOC_DIR
+        mkdir -p build-attempt2
+        cd build-attempt2
         
-        # Create bzero.c that implements bzero using memset
-        cat > bzero.c << 'EOF'
-        #include <string.h>
-        void bzero(void *s, size_t n) {
-        memset(s, 0, n);
-        }
-        EOF
+        echo "=== Attempt 2: Host compiler with --host ==="
         
-        # Compile it with NDK
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
-        $CC $CFLAGS -c bzero.c -o bzero.o
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        case "${{ matrix.arch }}" in
+          aarch64)
+            HOST="aarch64-linux-android"
+            ;;
+          arm)
+            HOST="arm-linux-androideabi"
+            ;;
+          i686)
+            HOST="i686-linux-android"
+            ;;
+          x86_64)
+            HOST="x86_64-linux-android"
+            ;;
+        esac
         
-        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
+        ../configure --prefix=$PWD/install --disable-python \
+          --host=$HOST \
+          CC="$CC" \
+          CFLAGS="--sysroot=$SYSROOT" \
+          LDFLAGS="--sysroot=$SYSROOT"
+        
+        make || echo "❌ Attempt 2 failed"
+        make install || echo "❌ Attempt 2 install failed"
 
-    - name: Patch all missing includes in PRoot
+    - name: Attempt 3 - Build talloc statically with NDK
       run: |
-            cd proot-src/src
-            
-            # Use a more reliable method to add headers
-            for file in $(find . -name "*.c" -type f); do
-                  echo "Patching $file"
-                  
-                  # Create a temporary file with headers
-                  {
-                        echo "#include <string.h>"
-                        echo "#include <stdlib.h>" 
-                        echo "#include <stdio.h>"
-                        echo "#include <strings.h>"
-                        echo "#include <unistd.h>"
-                        echo "#include <fcntl.h>"
-                        cat "$file"
-                  } > "${file}.tmp"
-                  
-                  mv "${file}.tmp" "$file"
+        cd $TALLOC_DIR
+        mkdir -p build-attempt3
+        cd build-attempt3
+        
+        echo "=== Attempt 3: Static build with NDK ==="
+        
+        ../configure --prefix=$PWD/install --disable-python \
+          --enable-static \
+          --disable-shared \
+          CC="$CC" \
+          CFLAGS="--sysroot=$SYSROOT -fPIC" \
+          LDFLAGS="--sysroot=$SYSROOT -static"
+        
+        make || echo "❌ Attempt 3 failed"
+        make install || echo "❌ Attempt 3 install failed"
+
+    - name: Attempt 4 - Manual build with NDK
+      run: |
+        cd $TALLOC_DIR
+        mkdir -p build-attempt4
+        cd build-attempt4
+        
+        echo "=== Attempt 4: Manual compilation ==="
+        
+        # Compile all .c files manually
+        for file in $(find ../ -name "*.c" -type f); do
+          echo "Compiling $file"
+          $CC --sysroot=$SYSROOT -fPIC -c "$file" -I../ -I$SYSROOT/usr/include -o "$(basename $file .c).o" || echo "Failed: $file"
+        done
+        
+        # Create static library
+        $NDK_TOOLCHAIN/bin/llvm-ar rcs libtalloc.a *.o || echo "❌ AR failed"
+        ls -la *.a || echo "No library created"
+
+    - name: Check results
+      run: |
+        echo "=== Build Results ==="
+        for attempt in 1 2 3 4; do
+          echo "Attempt $attempt:"
+          if [ -d "$TALLOC_DIR/build-attempt$attempt/install" ]; then
+            echo "✅ Success - install directory exists"
+            find "$TALLOC_DIR/build-attempt$attempt/install" -name "*.a" -o -name "*.so" | while read file; do
+              echo "  - $(basename $file)"
+              file "$file" || true
             done
-            
-            echo "✅ Added all standard headers to all C files"
+          else
+            echo "❌ Failed - no install directory"
+          fi
+          echo "---"
+        done
 
-    - name: Patch pipe2 usage in PRoot
-      run: |
-            cd proot-src/src
-            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
-            echo "✅ Patched pipe2 for Android compatibility"
-
-    - name: Build PRoot with NDK tools
-      run: |
-            cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
-            cp $BZERO_COMPAT/libbzero.a ./
-            make -f GNUmakefile clean || true
-            make -f GNUmakefile \
-                  CROSS_COMPILE="$CROSS_COMPILE" \
-                  CC="$CC" \
-                  STRIP="$STRIP" \
-                  OBJDUMP="$OBJDUMP" \
-                  OBJCOPY="$OBJCOPY" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
-                  V=1
-            if [ -f proot ]; then
-                  echo "✅ Build successful!"
-                  file proot
-                  ls -la proot
-                  chmod +x proot
-            else
-                  echo "❌ Binary not created!"
-                  exit 1
-            fi
-
-    - name: Prepare binary for release
-      run: |
-        mkdir -p release-binaries
-        cd proot-src/src
-        cp proot ../../release-binaries/${{ matrix.output }}
-        chmod +x ../../release-binaries/${{ matrix.output }}
-
-    - name: Upload binary artifact
+    - name: Upload build logs
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.output }}
-        path: release-binaries/${{ matrix.output }}
+        name: talloc-debug-${{ matrix.arch }}
+        path: |
+          $TALLOC_DIR/build-*/config.log
+          $TALLOC_DIR/build-*/Makefile
         retention-days: 1
-
-  create-release:
-    needs: build-proot
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Download successful artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        pattern: proot-*
-        merge-multiple: true
-
-    - name: Check available artifacts
-      run: |
-        echo "Available artifacts:"
-        find artifacts -type f -name "proot-*" | while read file; do
-          echo " - $file"
-          file "$file" || true
-        done
-        COUNT=$(find artifacts -type f -name "proot-*" | wc -l)
-        echo "Successful builds: $COUNT"
-        echo "COUNT=$COUNT" >> $GITHUB_ENV
-
-    - name: Create checksums
-      id: checksums
-      run: |
-        cd artifacts
-        find . -name "proot-*" -type f -exec sha256sum {} \; > checksums.txt
-        echo "CHECKSUMS_CONTENT<<EOF" >> $GITHUB_OUTPUT
-        cat checksums.txt >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Get commit info
-      id: commit
-      run: |
-        git clone --depth=1 https://github.com/termux/proot.git proot-temp
-        cd proot-temp
-        echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "message<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B | head -n 5 >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "date=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
-    - name: Create GitHub Release
-      if: env.COUNT > 0
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: build-${{ steps.commit.outputs.hash }}
-        name: "PRoot Build - ${{ steps.commit.outputs.hash }}"
-        body: |
-          # PRoot Binaries Build
-          
-          **Built with Android NDK for full Android compatibility**
-          
-          **Source Repository:** [termux/proot](https://github.com/termux/proot)
-          
-          **Commit Details:**
-          - **Hash:** `${{ steps.commit.outputs.full_hash }}`
-          - **Author:** ${{ steps.commit.outputs.author }}
-          - **Date:** ${{ steps.commit.outputs.date }}
-          - **Message:**
-          ```
-          ${{ steps.commit.outputs.message }}
-          ```
-          
-          **Built with all extensions enabled (ashmem, sysvipc, etc.)**
-          
-          **Target API Level:** 21 (Android 5.0+)
-          
-          **Statically linked with talloc**
-          
-          **Built Architectures:**
-          ${{ env.COUNT }} out of 4 architectures built successfully
-          
-          **SHA256 Checksums:**
-          ```
-          ${{ steps.checksums.outputs.CHECKSUMS_CONTENT }}
-          ```
-          
-          *Automatically built from latest source commit using Android NDK*
-        files: |
-          artifacts/proot-*
-          artifacts/checksums.txt
-
-    - name: Notify if no builds succeeded
-      if: env.COUNT == 0
-      run: |
-        echo "❌ No builds succeeded - check build logs for details"
-        exit 1
