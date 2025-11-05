@@ -57,21 +57,21 @@ jobs:
         
         # Add static flags to pre_configure
         static_flags = '''termux_step_pre_configure() {
-    # Static build flags
-    LDFLAGS+=" -static"
-    LDFLAGS+=" -Wl,--gc-sections"
-    LDFLAGS+=" -ltalloc"
+        # Static build flags
+        LDFLAGS+=" -static"
+        LDFLAGS+=" -Wl,--gc-sections"
+        LDFLAGS+=" -ltalloc"
     
-    # Performance optimizations
-    CFLAGS+=" -O3"
-    CFLAGS+=" -flto=thin"
-    CFLAGS+=" -fuse-ld=lld"
-    LDFLAGS+=" -flto=thin"
-    LDFLAGS+=" -fuse-ld=lld"
-    
-    CPPFLAGS+=" -DARG_MAX=131072"
-    CPPFLAGS+=" -DNDEBUG"
-'''
+        # Performance optimizations
+        CFLAGS+=" -O3"
+        CFLAGS+=" -flto=thin"
+        CFLAGS+=" -fuse-ld=lld"
+        LDFLAGS+=" -flto=thin"
+        LDFLAGS+=" -fuse-ld=lld"
+     
+        CPPFLAGS+=" -DARG_MAX=131072"
+        CPPFLAGS+=" -DNDEBUG"
+        '''
         
         if 'termux_step_pre_configure()' in content:
             content = re.sub(
