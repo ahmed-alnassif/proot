@@ -8,14 +8,10 @@ on:
   schedule:
     - cron: '0 0 * * 0'  # Weekly build
 
-env:
-  TERMUX_PREFIX: /data/data/com.termux/files/usr
-
 jobs:
   build-proot-static:
-    runs-on: ubuntu-latest
-    container: termux/package-builder
-
+    runs-on: ubuntu-22.04
+    
     steps:
     - name: Checkout termux-packages
       uses: actions/checkout@v4
@@ -23,91 +19,119 @@ jobs:
         repository: termux/termux-packages
         path: termux-packages
 
-    - name: Checkout proot source
+    - name: Setup Ubuntu environment
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          git curl wget unzip \
+          python3 python3-pip \
+          build-essential \
+          clang lld
+
+    - name: Setup Termux build environment
       run: |
         cd termux-packages
-        git clone https://github.com/termux/proot.git proot-source
+        ./scripts/setup-ubuntu.sh
+        ./scripts/setup-android-sdk.sh
 
-    - name: Setup dynamic patcher
+    - name: Patch proot for static build
       run: |
-        cat > /tmp/dynamic-patch.py << 'EOF'
-        #!/usr/bin/env python3
+        cd termux-packages
+        
+        # Create dynamic patch
+        cat > patch-proot.py << 'EOF'
         import re
         import os
         
-        def patch_build_sh(content):
-            # Update dependencies to include static
-            content = re.sub(
-                r'TERMUX_PKG_DEPENDS="libtalloc"',
-                'TERMUX_PKG_DEPENDS="libtalloc-static, libtalloc"',
-                content
-            )
-            
-            # Add static linking flags to pre_configure
-            if 'termux_step_pre_configure()' in content:
-                static_flags = '''termux_step_pre_configure() {
-        # Auto-patched static build flags
-        LDFLAGS+=" -static"
-        LDFLAGS+=" -Wl,--gc-sections"
-        LDFLAGS+=" -ltalloc"
+        build_file = "packages/proot/build.sh"
         
-        # Performance optimizations
-        CFLAGS+=" -O3"
-        CFLAGS+=" -flto=thin"
-        CFLAGS+=" -fuse-ld=lld"
-        CFLAGS+=" -march=armv8.2-a+crypto+dotprod"
-        LDFLAGS+=" -flto=thin"
-        LDFLAGS+=" -fuse-ld=lld"
-        LDFLAGS+=" -Wl,--lto-O3"
-        LDFLAGS+=" -Wl,--icf=all"
-        
-        CPPFLAGS+=" -DARG_MAX=131072"
-        CPPFLAGS+=" -DNDEBUG"
-        '''
-                content = re.sub(
-                    r'termux_step_pre_configure\(\) \{.*?\n\}',
-                    static_flags,
-                    content,
-                    flags=re.DOTALL
-                )
-            
-            return content
-        
-        # Read current build.sh
-        with open('termux-packages/packages/proot/build.sh', 'r') as f:
+        with open(build_file, 'r') as f:
             content = f.read()
         
-        # Apply patches
-        patched = patch_build_sh(content)
+        # Update dependencies
+        content = re.sub(
+            r'TERMUX_PKG_DEPENDS="libtalloc"',
+            'TERMUX_PKG_DEPENDS="libtalloc-static, libtalloc"',
+            content
+        )
         
-        # Write back
-        with open('termux-packages/packages/proot/build.sh', 'w') as f:
-            f.write(patched)
+        # Add static flags to pre_configure
+        static_flags = '''termux_step_pre_configure() {
+    # Static build flags
+    LDFLAGS+=" -static"
+    LDFLAGS+=" -Wl,--gc-sections"
+    LDFLAGS+=" -ltalloc"
+    
+    # Performance optimizations
+    CFLAGS+=" -O3"
+    CFLAGS+=" -flto=thin"
+    CFLAGS+=" -fuse-ld=lld"
+    LDFLAGS+=" -flto=thin"
+    LDFLAGS+=" -fuse-ld=lld"
+    
+    CPPFLAGS+=" -DARG_MAX=131072"
+    CPPFLAGS+=" -DNDEBUG"
+'''
         
-        print("✅ Successfully patched build.sh")
+        if 'termux_step_pre_configure()' in content:
+            content = re.sub(
+                r'termux_step_pre_configure\(\) \{.*?\n\}',
+                static_flags + '\n}',
+                content,
+                flags=re.DOTALL
+            )
+        
+        with open(build_file, 'w') as f:
+            f.write(content)
+        
+        print("Patched build.sh successfully")
         EOF
         
-        python3 /tmp/dynamic-patch.py
+        python3 patch-proot.py
 
-    - name: Build proot static
+    - name: Build proot
       run: |
         cd termux-packages
-        ./build-package.sh proot
+        export TERMUX_PKG_MAINTAINER="GitHub Actions"
+        ./build-package.sh -a aarch64 proot
 
     - name: Extract and verify binary
       run: |
         cd termux-packages
-        # Extract the built deb
-        dpkg-deb -x debs/proot_*.deb /tmp/proot-extract/
         
-        # Verify static linking
-        echo "🔍 Verifying binary..."
-        file /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
-        ldd /tmp/proot-extract/$TERMUX_PREFIX/bin/proot 2>&1 | grep -q "not a dynamic executable" && \
-          echo "✅ Binary is statically linked" || echo "❌ Binary is not static"
+        # Find the built package
+        DEB_FILE=$(ls debs/proot_*_aarch64.deb 2>/dev/null || ls debs/proot_*.deb | head -1)
         
-        # Check optimizations
-        readelf -p .comment /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
+        if [ -z "$DEB_FILE" ]; then
+          echo "❌ No deb file found"
+          ls -la debs/
+          exit 1
+        fi
+        
+        # Extract binary
+        mkdir -p /tmp/proot-extract
+        dpkg-deb -x "$DEB_FILE" /tmp/proot-extract/
+        
+        # Find proot binary
+        PROOT_BINARY=$(find /tmp/proot-extract -name proot -type f | head -1)
+        
+        if [ -z "$PROOT_BINARY" ]; then
+          echo "❌ No proot binary found in package"
+          find /tmp/proot-extract -type f
+          exit 1
+        fi
+        
+        echo "🔍 Binary analysis:"
+        file "$PROOT_BINARY"
+        echo ""
+        echo "📦 Size:"
+        ls -lh "$PROOT_BINARY"
+        echo ""
+        echo "🔧 Static check:"
+        ldd "$PROOT_BINARY" 2>&1 | head -5
+        echo ""
+        echo "🚀 Performance flags:"
+        readelf -p .comment "$PROOT_BINARY" 2>/dev/null || echo "No comment section"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
@@ -115,5 +139,5 @@ jobs:
         name: proot-static
         path: |
           termux-packages/debs/proot_*.deb
-          /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
+          /tmp/proot-extract/**/proot
         retention-days: 30
