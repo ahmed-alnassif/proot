@@ -1,310 +1,119 @@
-name: Build and Release PRoot
+# .github/workflows/build-proot-static.yml
+name: Build Static Proot
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    paths: ['scripts/proot/**']
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly build
 
-permissions:
-  contents: write
+env:
+  TERMUX_PREFIX: /data/data/com.termux/files/usr
 
 jobs:
-  build-proot:
+  build-proot-static:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: aarch64
-            ndk_triplet: aarch64-linux-android
-            api_level: 21
-            output: proot-arm64
-          - arch: arm
-            ndk_triplet: armv7a-linux-androideabi
-            api_level: 21
-            output: proot-arm
-          - arch: i686
-            ndk_triplet: i686-linux-android
-            api_level: 21
-            output: proot-x86
-          - arch: x86_64
-            ndk_triplet: x86_64-linux-android
-            api_level: 21
-            output: proot-x86-64
-      fail-fast: false
+    container: termux/package-builder
 
     steps:
-    - name: Checkout PRoot source
+    - name: Checkout termux-packages
       uses: actions/checkout@v4
       with:
-        repository: termux/proot
-        path: proot-src
+        repository: termux/termux-packages
+        path: termux-packages
 
-    - name: Get commit details
-      id: commit-info
+    - name: Checkout proot source
       run: |
-        cd proot-src
-        echo "COMMIT_HASH=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "COMMIT_SHORT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "COMMIT_MESSAGE<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B | head -n 10 >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "COMMIT_AUTHOR=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "COMMIT_DATE=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+        cd termux-packages
+        git clone https://github.com/termux/proot.git proot-source
 
-    - name: Setup Android NDK
-      uses: nttld/setup-ndk@v1
-      with:
-        ndk-version: r25b
-        add-to-path: true
-
-    - name: Install basic build tools
+    - name: Setup dynamic patcher
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          file \
-          wget \
-          git \
-          automake \
-          libtool \
-          pkg-config \
-          python3
-
-    - name: Build talloc for Android (waf + qemu)
-      run: |
-            sudo apt-get update
-            sudo apt-get install -y python3 qemu-user-static
-
-            wget https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz
-            tar xzf talloc-2.4.3.tar.gz
-            cd talloc-2.4.3
-
-            NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-            export CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-            export AR="$NDK_TOOLCHAIN/bin/llvm-ar"
-            export RANLIB="$NDK_TOOLCHAIN/bin/llvm-ranlib"
-            export HOSTCC="/usr/bin/gcc"
-
-            # choose qemu binary by arch:
-            case "${{ matrix.arch }}" in
-                  aarch64) QEMU_BIN="/usr/bin/qemu-aarch64-static" ;;
-                  arm)             QEMU_BIN="/usr/bin/qemu-arm-static" ;;
-                  i686)            QEMU_BIN="/usr/bin/qemu-i386-static" ;;
-                  x86_64)      QEMU_BIN="/usr/bin/qemu-x86_64-static" ;;
-            esac
-
-            ./waf configure \
-                  --cross-compile \
-                  --cc="$CC" \
-                  --hostcc="$HOSTCC" \
-                  --cross-execute="$QEMU_BIN" \
-                  --disable-python \
-                  --prefix="$PWD/_install"
-
-            ./waf build -j$(nproc)
-            ./waf install
-
-            echo "TALLOC_INCLUDE=$PWD/_install/include" >> $GITHUB_ENV
-            echo "TALLOC_LIB=$PWD/_install/lib" >> $GITHUB_ENV
-
-    - name: Set up NDK environment
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        CC_PATH="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        STRIP_PATH="$NDK_TOOLCHAIN/bin/llvm-strip"
-        OBJCOPY="$NDK_TOOLCHAIN/bin/llvm-objcopy"
-        OBJDUMP="$NDK_TOOLCHAIN/bin/llvm-objdump"
+        cat > /tmp/dynamic-patch.py << 'EOF'
+        #!/usr/bin/env python3
+        import re
+        import os
         
-        echo "CC=$CC_PATH" >> $GITHUB_ENV
-        echo "STRIP=$STRIP_PATH" >> $GITHUB_ENV
-        echo "OBJCOPY=$OBJCOPY" >> $GITHUB_ENV
-        echo "OBJDUMP=$OBJDUMP" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}-" >> $GITHUB_ENV
-        echo "SYSROOT=$NDK_TOOLCHAIN/sysroot" >> $GITHUB_ENV
-        echo "NDK_TOOLCHAIN=$NDK_TOOLCHAIN" >> $GITHUB_ENV
-
-    - name: Add bzero compatibility library
-      run: |
-        NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-        mkdir -p bzero-compat
-        cd bzero-compat
+        def patch_build_sh(content):
+            # Update dependencies to include static
+            content = re.sub(
+                r'TERMUX_PKG_DEPENDS="libtalloc"',
+                'TERMUX_PKG_DEPENDS="libtalloc-static, libtalloc"',
+                content
+            )
+            
+            # Add static linking flags to pre_configure
+            if 'termux_step_pre_configure()' in content:
+                static_flags = '''termux_step_pre_configure() {
+        # Auto-patched static build flags
+        LDFLAGS+=" -static"
+        LDFLAGS+=" -Wl,--gc-sections"
+        LDFLAGS+=" -ltalloc"
         
-        # Create bzero.c that implements bzero using memset
-        cat > bzero.c << 'EOF'
-        #include <string.h>
-        void bzero(void *s, size_t n) {
-        memset(s, 0, n);
-        }
+        # Performance optimizations
+        CFLAGS+=" -O3"
+        CFLAGS+=" -flto=thin"
+        CFLAGS+=" -fuse-ld=lld"
+        CFLAGS+=" -march=armv8.2-a+crypto+dotprod"
+        LDFLAGS+=" -flto=thin"
+        LDFLAGS+=" -fuse-ld=lld"
+        LDFLAGS+=" -Wl,--lto-O3"
+        LDFLAGS+=" -Wl,--icf=all"
+        
+        CPPFLAGS+=" -DARG_MAX=131072"
+        CPPFLAGS+=" -DNDEBUG"
+        '''
+                content = re.sub(
+                    r'termux_step_pre_configure\(\) \{.*?\n\}',
+                    static_flags,
+                    content,
+                    flags=re.DOTALL
+                )
+            
+            return content
+        
+        # Read current build.sh
+        with open('termux-packages/packages/proot/build.sh', 'r') as f:
+            content = f.read()
+        
+        # Apply patches
+        patched = patch_build_sh(content)
+        
+        # Write back
+        with open('termux-packages/packages/proot/build.sh', 'w') as f:
+            f.write(patched)
+        
+        print("✅ Successfully patched build.sh")
         EOF
         
-        # Compile it with NDK
-        CC="$NDK_TOOLCHAIN/bin/${{ matrix.ndk_triplet }}${{ matrix.api_level }}-clang"
-        CFLAGS="--sysroot=$NDK_TOOLCHAIN/sysroot -fPIC"
-        $CC $CFLAGS -c bzero.c -o bzero.o
-        $NDK_TOOLCHAIN/bin/llvm-ar rcs libbzero.a bzero.o
+        python3 /tmp/dynamic-patch.py
+
+    - name: Build proot static
+      run: |
+        cd termux-packages
+        ./build-package.sh proot
+
+    - name: Extract and verify binary
+      run: |
+        cd termux-packages
+        # Extract the built deb
+        dpkg-deb -x debs/proot_*.deb /tmp/proot-extract/
         
-        echo "BZERO_COMPAT=$PWD" >> $GITHUB_ENV
+        # Verify static linking
+        echo "🔍 Verifying binary..."
+        file /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
+        ldd /tmp/proot-extract/$TERMUX_PREFIX/bin/proot 2>&1 | grep -q "not a dynamic executable" && \
+          echo "✅ Binary is statically linked" || echo "❌ Binary is not static"
+        
+        # Check optimizations
+        readelf -p .comment /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
 
-    - name: Patch all missing includes in PRoot
-      run: |
-            cd proot-src/src
-            
-            # Use a more reliable method to add headers
-            for file in $(find . -name "*.c" -type f); do
-                  echo "Patching $file"
-                  
-                  # Create a temporary file with headers
-                  {
-                        echo "#include <string.h>"
-                        echo "#include <stdlib.h>" 
-                        echo "#include <stdio.h>"
-                        echo "#include <strings.h>"
-                        echo "#include <unistd.h>"
-                        echo "#include <fcntl.h>"
-                        cat "$file"
-                  } > "${file}.tmp"
-                  
-                  mv "${file}.tmp" "$file"
-            done
-            
-            echo "✅ Added all standard headers to all C files"
-
-    - name: Patch pipe2 usage in PRoot
-      run: |
-            cd proot-src/src
-            sed -i 's/pipe2(\([^,]*\), O_CLOEXEC)/pipe(\1) == 0 \&\& fcntl(\1[0], F_SETFD, FD_CLOEXEC) == 0 \&\& fcntl(\1[1], F_SETFD, FD_CLOEXEC) == 0/g' extension/sysvipc/sysvipc_shm.c
-            echo "✅ Patched pipe2 for Android compatibility"
-
-    - name: Build PRoot with NDK tools (FIXED OBJCOPY/OBJDUMP)
-      run: |
-            cd proot-src/src
-            cp $TALLOC_LIB/libtalloc.so.2.4.3 ./libtalloc.a
-            cp $BZERO_COMPAT/libbzero.a ./
-            make -f GNUmakefile clean || true
-            make -f GNUmakefile \
-                  CROSS_COMPILE="$CROSS_COMPILE" \
-                  CC="$CC" \
-                  STRIP="$STRIP" \
-                  OBJDUMP="$OBJDUMP" \
-                  OBJCOPY="$OBJCOPY" \
-                  CPPFLAGS="-I$TALLOC_INCLUDE -I$SYSROOT/usr/include -I." \
-                  LDFLAGS="-L. -L$SYSROOT/usr/lib -ltalloc -lbzero" \
-                  V=1
-            if [ -f proot ]; then
-                  echo "✅ Build successful!"
-                  file proot
-                  ls -la proot
-                  chmod +x proot
-            else
-                  echo "❌ Binary not created!"
-                  exit 1
-            fi
-
-    - name: Prepare binary for release
-      run: |
-        mkdir -p release-binaries
-        cd proot-src/src
-        cp proot ../../release-binaries/${{ matrix.output }}
-        chmod +x ../../release-binaries/${{ matrix.output }}
-
-    - name: Upload binary artifact
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.output }}
-        path: release-binaries/${{ matrix.output }}
-        retention-days: 1
-
-  create-release:
-    needs: build-proot
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-    - name: Download successful artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        pattern: proot-*
-        merge-multiple: true
-
-    - name: Check available artifacts
-      run: |
-        echo "Available artifacts:"
-        find artifacts -type f -name "proot-*" | while read file; do
-          echo " - $file"
-          file "$file" || true
-        done
-        COUNT=$(find artifacts -type f -name "proot-*" | wc -l)
-        echo "Successful builds: $COUNT"
-        echo "COUNT=$COUNT" >> $GITHUB_ENV
-
-    - name: Create checksums
-      id: checksums
-      run: |
-        cd artifacts
-        find . -name "proot-*" -type f -exec sha256sum {} \; > checksums.txt
-        echo "CHECKSUMS_CONTENT<<EOF" >> $GITHUB_OUTPUT
-        cat checksums.txt >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Get commit info
-      id: commit
-      run: |
-        git clone --depth=1 https://github.com/termux/proot.git proot-temp
-        cd proot-temp
-        echo "hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-        echo "full_hash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-        echo "message<<EOF" >> $GITHUB_OUTPUT
-        git log -1 --pretty=%B | head -n 5 >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "author=$(git log -1 --pretty=%an)" >> $GITHUB_OUTPUT
-        echo "date=$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
-    - name: Create GitHub Release
-      if: env.COUNT > 0
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: build-${{ steps.commit.outputs.hash }}
-        name: "PRoot Build - ${{ steps.commit.outputs.hash }}"
-        body: |
-          # PRoot Binaries Build
-          
-          **Built with Android NDK for full Android compatibility**
-          
-          **Source Repository:** [termux/proot](https://github.com/termux/proot)
-          
-          **Commit Details:**
-          - **Hash:** `${{ steps.commit.outputs.full_hash }}`
-          - **Author:** ${{ steps.commit.outputs.author }}
-          - **Date:** ${{ steps.commit.outputs.date }}
-          - **Message:**
-          ```
-          ${{ steps.commit.outputs.message }}
-          ```
-          
-          **Built with all extensions enabled (ashmem, sysvipc, etc.)**
-          
-          **Target API Level:** 21 (Android 5.0+)
-          
-          **Statically linked with talloc**
-          
-          **Built Architectures:**
-          ${{ env.COUNT }} out of 4 architectures built successfully
-          
-          **SHA256 Checksums:**
-          ```
-          ${{ steps.checksums.outputs.CHECKSUMS_CONTENT }}
-          ```
-          
-          *Automatically built from latest source commit using Android NDK*
-        files: |
-          artifacts/proot-*
-          artifacts/checksums.txt
-
-    - name: Notify if no builds succeeded
-      if: env.COUNT == 0
-      run: |
-        echo "❌ No builds succeeded - check build logs for details"
-        exit 1
+        name: proot-static
+        path: |
+          termux-packages/debs/proot_*.deb
+          /tmp/proot-extract/$TERMUX_PREFIX/bin/proot
+        retention-days: 30
